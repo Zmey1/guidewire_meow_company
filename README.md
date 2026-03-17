@@ -561,77 +561,8 @@ guidewire_meow_company/
 │   ├── models/                  # risk_score.py, income_predict.py, loss_calc.py, forecast_risk.py
 │   └── main.py
 └── README.md
+
 ```
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18+
-- Python 3.10+
-- MongoDB Atlas account (free M0 tier)
-- OpenWeatherMap API key (free at [openweathermap.org](https://openweathermap.org))
-
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/Zmey1/guidewire_meow_company
-cd guidewire_meow_company
-
-# Backend
-cd backend
-npm install
-cp .env.example .env
-# Edit .env: fill in MONGO_URI, JWT_SECRET, WEATHER_API_KEY
-npm run dev
-
-# AI Service
-cd ../ai-service
-pip install -r requirements.txt --break-system-packages
-uvicorn main:app --reload --port 8001
-
-# Mobile App (Rider)
-cd ../mobile
-npm install
-npx expo start
-# Scan QR code with Expo Go, or press 'a' for Android emulator
-
-# Admin Dashboard (Web)
-cd ../admin-dashboard
-npm install
-npm run dev
-# Opens at http://localhost:5173
-```
-
-### Environment Variables
-
-```env
-# backend/.env
-MONGO_URI=mongodb+srv://...
-JWT_SECRET=your_secret_here
-WEATHER_API_KEY=your_openweathermap_key
-FLOOD_API_KEY=mock
-
-# ai-service/.env
-MONGO_URI=mongodb+srv://...
-```
-
-Set `FLOOD_API_KEY=mock` to use the built-in mock flood feed. Replace with a real IMD API token if available.
-
-### Seed Demo Data
-
-```bash
-cd backend
-npm run seed
-# Creates 5 zones, 50 synthetic riders, 3 dark stores, and 30 days of historical trigger events
-```
-
-Then open the admin panel at `http://localhost:5173/admin` and click **Simulate Disruption Event** to run the full demo loop.
-
----
 
 ## Roadmap
 
