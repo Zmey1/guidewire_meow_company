@@ -587,7 +587,3 @@ guidewire_meow_company/
 | Test coverage | Unit tests on all core algorithm functions |
 
 ---
-
-## License
-
-MIT — Built for Guidewire DEVTrails 2026 by **Meow Company**, SRM IST.
