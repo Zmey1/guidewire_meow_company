@@ -334,11 +334,11 @@ Gig workers think in short earning cycles. ShiftSure uses a **weekly pricing mod
 
 ### Plan Tiers
 
-| Plan | Base Weekly Premium | Weekly Coverage Cap | Best For |
-|---|---|---|---|
-| **Lite** | Rs. 29 | Rs. 1,500 | Lower weekly risk exposure |
-| **Standard** | Rs. 49 | Rs. 2,500 | Average q-commerce rider |
-| **Plus** | Rs. 79 | Rs. 4,000 | High dependency on delivery income |
+| Plan | Base Weekly Premium | Weekly Coverage Cap | Best For | Ideal For |
+|---|---|---|---|---|
+| **Lite** | Rs. 39 | Rs. 1,500 | Lower weekly risk exposure | Part-time Riders |
+| **Standard** | Rs. 59 | Rs. 2,500 | Average q-commerce rider | Part-time/Full-time Riders |
+| **Plus** | Rs. 89 | Rs. 4,000 | High dependency on delivery income | Full-time Riders |
 
 ### Dynamic Premium Formula
 
