@@ -42,8 +42,6 @@ This makes q-commerce a strong fit for **parametric insurance**, where claims ar
 
 ## Coverage Scope
 
-ShiftSure covers **loss of income only**.
-
 ### Included
 - Lost delivery earnings due to verified disruption events
 - Missed work hours caused by weather or platform-side disruptions
