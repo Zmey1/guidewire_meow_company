@@ -35,7 +35,7 @@ We selected **Grocery / Q-Commerce** as our target persona because this segment 
 - Hyperlocal rain or flooding can stop pickups and drop-offs immediately
 - Loss of income is easier to model and demonstrate clearly
 
-This makes q-commerce a strong fit for **parametric insurance**, where claims are triggered by predefined real-world events instead of manual paperwork-heavy verification.
+This makes q-commerce a strong fit for **parametric insurance**, where claims are triggered by predefined real-world events instead of manual, paperwork-heavy verification.
 
 ---
 
@@ -90,19 +90,20 @@ ShiftSure detects:
 - shift overlap
 - dispatch interruption
 
-The platform automatically initiates a claim, estimates lost eligible hours, and simulates a payout to Ravi’s registered UPI account.
+The platform automatically initiates a claim, estimates protected lost hours, and simulates a payout to Ravi’s registered UPI account.
 
 ---
 
 ## Solution Overview
 
-ShiftSure has five core modules:
+ShiftSure has six core modules:
 
 1. **Smart Onboarding**
 2. **AI-Assisted Risk Profiling**
 3. **Weekly Policy Creation**
 4. **Parametric Trigger Monitoring**
 5. **Automatic Claims and Payout Simulation**
+6. **Fraud Detection and Validation**
 
 ---
 
@@ -168,6 +169,41 @@ A claim condition is met when the assigned store cannot dispatch orders or when 
 
 ### Trigger 4: Zone Restriction / Closure
 A claim condition is met when curfews, police restrictions, market closures, or sudden access restrictions prevent deliveries.
+
+---
+
+## AI Layer
+
+ShiftSure uses lightweight, explainable AI models to support risk-aware decision-making, fair pricing, and more accurate compensation.
+
+### 1. Risk Scoring
+A composite risk score is calculated using:
+- real-time weather conditions
+- historical disruption patterns
+- zone-specific vulnerability such as flood-prone areas and traffic density
+- dark-store reliability
+- shift timing exposure
+
+This score helps estimate how likely a disruption is for a rider in a specific zone and time window.
+
+### 2. Income Prediction
+ShiftSure estimates a rider’s expected earnings for a given shift using:
+- historical delivery density in the zone
+- rider’s selected work hours
+- simulated platform demand patterns
+- environmental disruption conditions
+
+This gives us a baseline estimate of **protected shift income**, which represents what the rider would likely have earned under normal conditions.
+
+### 3. Income-Aware Loss Estimation
+ShiftSure does not stop at event detection. It also estimates the likely financial impact of the disruption.
+
+The product uses:
+- **parametric triggers** to determine claim eligibility
+- **expected shift-income estimation** to measure earnings impact
+- **policy caps and plan rules** to determine final payout
+
+This gives us a stronger model than a flat event-based payout while still keeping the system parametric and automation-friendly.
 
 ---
 
