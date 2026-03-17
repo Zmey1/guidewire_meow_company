@@ -5,10 +5,11 @@
 - **Hackathon:** Guidewire DEVTrails 2026
 - **Phase:** Seed / Phase 1 - Ideation & Foundation
 - **Persona Chosen:** Grocery / Q-Commerce Delivery Partners
+- **Team Name:** Meow Company
 - **University:** SRM IST
 
 ## Demo Links
-- **GitHub Repository:** [Add repo link here]
+- **GitHub Repository:** https://github.com/Zmey1/guidewire_meow_company
 - **2-Minute Public Video:** [Add video link here]
 - **Prototype / Figma:** [Add prototype link here]
 
