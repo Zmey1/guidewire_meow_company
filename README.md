@@ -152,6 +152,39 @@ All five triggers require the disruption window to overlap with the rider's decl
 | Tier 2 (AQI) | AQI >= 400 (Severe) | 80% of eligible shift income |
 
 *Source: OpenWeatherMap free tier (temperature/heat index + Air Pollution API — same key)*
+### 5. Graph Intelligence (InfDetect-Inspired)
+
+ShiftSure extends traditional fraud detection using a **graph-based intelligence layer** that models relationships between entities instead of evaluating claims in isolation.
+
+**Graph Model:**
+
+Nodes:
+- Worker
+- Location (Zone)
+- Weather Event
+- Claim
+- Device (GPS / Phone)
+
+Edges:
+- Worker → Location
+- Worker → Claim
+- Location → Weather Event
+- Worker → Device
+
+**What it detects:**
+- Clustered claims in the same zone
+- Mismatch between claims and real-world events
+- Shared devices across multiple accounts
+- Repeated or coordinated claim behavior
+
+**Example:**
+If multiple workers file claims in a zone with no rainfall, the graph detects an abnormal cluster and flags it as fraud.
+
+**Output:**
+- Graph-based fraud risk score
+- Worker trust score (used in decision layer)
+
+This approach is inspired by **InfDetect**, a large-scale graph-based fraud detection system used in insurance.
 
 ### Composite Risk Score
 
@@ -285,27 +318,30 @@ Annual blended loss ratio ~85–95%, viable for a microinsurance product with ze
 
 ---
 
-## Fraud Detection
+## Fraud Detection (Hybrid AI + Graph Intelligence)
+ShiftSure uses a **multi-layer fraud detection pipeline** combining rules, anomaly detection, machine learning, and graph intelligence.
 
-### Phase 1 — Rule-Based Scoring
+### Fraud Pipeline
 
-| Rule | Signal | Score Impact |
-|---|---|---|
-| Duplicate payout | Same `worker_id` + `trigger_event_id` already paid | Reject immediately |
-| Enrolment velocity | Enrolled < 2 hours before trigger in their zone | +60 |
-| Earnings outlier | `weekly_income_band` > Rs. 14,000/week and unverified | +30 |
-| Claim frequency | > 5 claims in the current week | +25 |
-| Zone hopping | Changed zone > 2 times in past 7 days | +20 |
+1. **Rule Engine**
+   - Duplicate payouts
+   - Suspicious enrolment timing
+   - Zone hopping patterns
 
-**Thresholds:** `fraud_score ≥ 70` → hold for manual review | `40–69` → auto-approve but flag | `< 40` → auto-approve
+2. **Anomaly Detection**
+   - Isolation Forest–style logic
+   - Detects unusual claim frequency or behavior
 
-### Phase 2 — GPS / Location Validation
+3. **ML Classifier (Phase 2)**
+   - Decision Tree / Random Forest
+   - Classifies fraud vs genuine claims
 
-With rider consent, the app collects GPS pings every 5 minutes during declared shift hours. This enables zone-presence verification, GPS spoofing detection (impossible travel patterns, jitter analysis), and activity baseline fingerprinting per rider.
+4. **Graph Intelligence Layer**
+   - Detects relationship-based fraud patterns
+   - Identifies coordinated attacks and hidden connections
 
-### Phase 3 — Historical Weather Cross-Referencing
+Final decision is based on a **combined fraud score + graph risk score**.
 
-Claims are retroactively verified against OpenWeatherMap historical data and IMD archival feeds. Riders who consistently claim at borderline trigger thresholds are flagged for pattern analysis.
 
 ---
 
