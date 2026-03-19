@@ -270,51 +270,71 @@ forecast_risk_score = weighted_average(
 
 ---
 
-## Weekly Premium Model
+## Weekly Premium Model — Mutual Micro-Pools
 
-ShiftSure uses a **weekly pricing model** that matches how gig workers earn. Premiums are dynamically adjusted each week based on predicted disruption risk — riders in safer zones pay less, riders in high-risk zones during monsoon weeks pay a fair risk-adjusted price.
+ShiftSure uses a **weekly pricing model** that matches how gig workers earn. But unlike traditional insurance where premiums disappear into a central corporate fund, ShiftSure uses a **mutual micro-pool model** at the dark-store level — inspired by Takaful and modern mutual InsurTech models like Lemonade's giveback.
+
+Riders who work from the same dark store and face the same operating conditions are grouped into the same protection pool. Instead of treating every rider as an isolated policyholder, ShiftSure treats the dark-store cluster as a shared risk unit.
+
+### How the Pool Works
+
+Every dark store already has a fixed set of delivery partners assigned to it. These riders share the same operating zone, the same weather exposure, the same dispatch conditions, and similar disruption patterns. ShiftSure uses this existing assignment as a **natural pool boundary**.
+
+When a rider purchases weekly coverage, their premium is split into three parts:
+```text
+Rider pays weekly premium
+        │
+        ├──▶ [Operating Fee]
+        │    Goes to ShiftSure. Covers platform costs, technology,
+        │    and operations. This is our revenue. Non-refundable.
+        │
+        ├──▶ [City Reserve]
+        │    Shared reserve across all pools in the same city.
+        │    Used when a single pool is overwhelmed during a severe
+        │    week. Pools insuring each other — reinsurance at micro-scale.
+        │
+        └──▶ [Pool Risk Fund]
+             Stays within this dark-store pool.
+             All claims for pool members are paid from here.
+             Whatever remains at end of week = surplus.
+```
+
+### The Surplus Mechanic
+
+At the end of each week, the Pool Risk Fund either has money left or it doesn't.
+
+**Low-claim week:** Few or no disruptions hit the zone. The Pool Risk Fund is largely intact. The remaining surplus is distributed back to every pool member as a **rebate on next week's premium**.
+
+**Moderate week:** A disruption occurs but affects only part of the pool. Some claims are paid out. Whatever surplus remains (if any) is still distributed back — just a smaller rebate.
+
+**Severe week:** A major zone-wide disruption hits. The Pool Risk Fund is exhausted. The City Reserve covers the overflow. No surplus this week — every member pays full premium next week.
+
+**The Financial Incentive:** Riders have a direct financial stake in pool health. Because claim volume dictates surplus rebates, the incentive shifts from "maximizing claims" to "protecting the pool" for individual savings.
+
+### Weekly Settlement
+
+Surplus is calculated and distributed **once per week** when the new coverage period begins.
 
 ### Plan Tiers
 
-| Plan | Base Weekly Premium | Weekly Coverage Cap | Best For |
-|---|---|---|---|
-| **Lite** | Rs. 39 | Rs. 1,500 | Part-time riders, lower risk exposure |
-| **Standard** | Rs. 59 | Rs. 2,500 | Average q-commerce rider |
-| **Plus** | Rs. 89 | Rs. 4,000 | Full-time riders, high income dependency |
+| Plan | Coverage Level | Best For |
+|---|---|---|
+| **Lite** | Base coverage cap | Part-time riders, lower shift volume |
+| **Standard** | Mid-range coverage cap | Typical q-commerce rider |
+| **Plus** | Highest coverage cap | Full-time riders, high income dependency |
+
+Base premium prices and exact coverage caps will be calibrated against real rider earning data and zone-level risk profiles during Phase 2.
 
 ### Dynamic Premium Formula
-
-```
+```text
 Weekly Premium = Base Plan Price
-              + Zone Risk Add-on
-              + Forecast Risk Add-on
-              − Reliability Discount
-
-Zone Risk Add-on:
-  < 2 disruptions/month historically  → Rs. 0
-  2–4 disruptions/month               → Rs. 10
-  > 4 disruptions/month               → Rs. 20
-
-Forecast Risk Add-on:
-  forecast_risk_score < 30   → Rs. 0
-  forecast_risk_score 30–59  → Rs. 5
-  forecast_risk_score 60–79  → Rs. 10
-  forecast_risk_score ≥ 80   → Rs. 15
-
-Reliability Discount:
-  0 claims in last 4 weeks   → −Rs. 10
-  0 claims in last 8 weeks   → −Rs. 15
+              + Zone Risk Add-on       (historical disruption frequency for this dark store)
+              + Forecast Risk Add-on   (predicted disruption risk for the coming week)
+              − Surplus Rebate         (rider's share of previous week's pool surplus)
 ```
 
-### Actuarial Viability (Standard Plan, 1,000 Riders)
+The surplus rebate is what makes this model fundamentally different from standard dynamic pricing. Riders don't just pay a calculated premium — they see money come *back* when their pool stays healthy. Over time, riders in consistently low-claim pools pay significantly less than the base price. Riders in high-claim pools pay closer to base — but still benefit in any week where claims come in lighter than expected.
 
-| Scenario | Claim Rate | Avg Payout | Total Claims | Pool | Loss Ratio |
-|---|---|---|---|---|---|
-| Normal week | 8% | Rs. 350 | Rs. 28,000 | Rs. 64,000 | 43.8% ✅ |
-| Moderate week | 15% | Rs. 500 | Rs. 75,000 | Rs. 69,000 | 108.7% (offset by reserves) |
-| Severe week | 25% | Rs. 700 | Rs. 175,000 | Rs. 74,000 | 236.5% (requires reinsurance) |
-
-Annual blended loss ratio ~85–95%, viable for a microinsurance product with zero-agent, zero-manual-claims operations. B2B platform fee (Rs. 50–150/worker/month) provides additional margin.
 
 ---
 
@@ -392,157 +412,6 @@ Final decision is based on a **combined fraud score + graph risk score**.
 |  forecast_snapshots | fraud_logs                               |
 +----------------------------------------------------------------+
 ```
-
----
-
-## Database Schema
-
-### workers
-```json
-{
-  "_id": "ObjectId",
-  "name": "string",
-  "phone": "string",
-  "zone_id": "ObjectId",
-  "platform": "blinkit | zepto | swiggy",
-  "dark_store_id": "ObjectId",
-  "shift_slots": [{ "day": "string", "start_hour": 17, "end_hour": 23 }],
-  "weekly_income_band": "number",
-  "upi_id": "string",
-  "wallet_balance": "number",
-  "kyc_verified": "boolean",
-  "claims_this_week": "number",
-  "createdAt": "Date"
-}
-```
-
-### policies
-```json
-{
-  "_id": "ObjectId",
-  "worker_id": "ObjectId",
-  "plan": "lite | standard | plus",
-  "weekly_premium": "number",
-  "weekly_cap": "number",
-  "status": "active | expired | cancelled",
-  "valid_from": "Date",
-  "valid_to": "Date",
-  "createdAt": "Date"
-}
-```
-
-### trigger_events
-```json
-{
-  "_id": "ObjectId",
-  "zone_id": "ObjectId",
-  "timestamp": "Date",
-  "risk_score": "number",
-  "conditions": {
-    "rain_mm": "number",
-    "flood_signal": "boolean",
-    "dispatch_outage": "boolean",
-    "zone_restriction": "boolean",
-    "heat_index_c": "number",
-    "aqi": "number"
-  },
-  "payouts_issued": "number",
-  "total_paid_inr": "number"
-}
-```
-
-### claims
-```json
-{
-  "_id": "ObjectId",
-  "worker_id": "ObjectId",
-  "policy_id": "ObjectId",
-  "trigger_event_id": "ObjectId",
-  "expected_income": "number",
-  "payout_amount": "number",
-  "fraud_score": "number",
-  "status": "settled | held_for_review | rejected",
-  "createdAt": "Date",
-  "settled_at": "Date"
-}
-```
-
-### zones
-```json
-{
-  "_id": "ObjectId",
-  "name": "string",
-  "city": "string",
-  "lat": "number",
-  "lon": "number",
-  "base_orders_per_day": "number",
-  "density_factor": "number",
-  "dark_store_ids": ["ObjectId"]
-}
-```
-
-Additional collections: `forecast_snapshots` (weekly risk outlook per zone), `fraud_logs` (audit trail).
-
----
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
-| POST | `/api/auth/register` | Rider registration |
-| POST | `/api/auth/login` | JWT login |
-| GET | `/api/policies` | List active policies |
-| POST | `/api/policies` | Purchase a plan (premium dynamically calculated) |
-| POST | `/api/ai/risk-score` | Compute zone risk score |
-| POST | `/api/ai/predict-income` | Estimate shift income |
-| POST | `/api/ai/calculate-loss` | Compute payout amount |
-| GET | `/api/ai/forecast-risk/:zoneId` | Next-week risk outlook for a zone |
-| POST | `/api/ai/dynamic-premium` | Personalised weekly premium for rider + zone + forecast |
-| POST | `/api/claims/trigger` | Manual claim trigger |
-| GET | `/api/claims/history` | Worker's claim history |
-| GET | `/api/wallet/:workerId` | Wallet balance + transaction history |
-| GET | `/api/zones` | All zones with current risk scores |
-| GET | `/api/zones/:id/risk` | Live risk for a specific zone |
-| POST | `/api/gps/log` | Rider GPS pings during active shifts |
-| GET | `/api/admin/analytics` | Portfolio overview, loss ratios, predictive claim volume |
-| POST | `/internal/scheduler/run` | Internal cron endpoint — not publicly exposed |
-| POST | `/api/admin/simulate-trigger` | Demo mode — fires a full trigger cycle |
-
-### Demo Endpoint
-
-```json
-POST /api/admin/simulate-trigger
-
-{
-  "zone_id": "64abc...",
-  "trigger_type": "rain",
-  "rain_mm": 28,
-  "flood_signal": true,
-  "dispatch_outage": false,
-  "zone_restriction": false,
-  "heat_index_c": 38,
-  "aqi": 150
-}
-```
-
-`trigger_type` accepts: `rain`, `flood`, `dispatch_outage`, `zone_restriction`, `heat`, `aqi`
-
----
-
-## Demo Flow
-
-A judge can verify the full end-to-end loop in under 5 minutes:
-
-1. Open rider mobile dashboard — Ravi's active Standard plan, wallet Rs. 0, zone risk: Low
-2. Open admin panel — click **Simulate Disruption Event**, set zone: Koramangala, `rain_mm = 28`, `flood_signal = true`
-3. Composite risk score computes to **84** — Full payout tier triggered
-4. Shift overlap validated — Ravi's 17:00–23:00 slot overlaps the trigger window
-5. Expected income calculated — Rs. 420 for the affected shift window
-6. Payout applied — Rs. 420 × 1.0 multiplier, within weekly_cap Rs. 2,500
-7. Wallet updated in real time — Rs. 0 → Rs. 420
-8. Claim record written — `status: settled`, `fraud_score: 8`, `settled_at: <timestamp>`
-
-**Total time from button click to wallet credit: under 5 seconds.**
 
 ---
 
