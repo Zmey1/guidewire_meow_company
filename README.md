@@ -152,39 +152,6 @@ All five triggers require the disruption window to overlap with the rider's decl
 | Tier 2 (AQI) | AQI >= 400 (Severe) | 80% of eligible shift income |
 
 *Source: OpenWeatherMap free tier (temperature/heat index + Air Pollution API — same key)*
-### Graph Intelligence 
-
-ShiftSure extends traditional fraud detection using a **graph-based intelligence layer** that models relationships between entities instead of evaluating claims in isolation.
-
-**Graph Model:**
-
-Nodes:
-- Worker
-- Location (Zone)
-- Weather Event
-- Claim
-- Device (GPS / Phone)
-
-Edges:
-- Worker → Location
-- Worker → Claim
-- Location → Weather Event
-- Worker → Device
-
-**What it detects:**
-- Clustered claims in the same zone
-- Mismatch between claims and real-world events
-- Shared devices across multiple accounts
-- Repeated or coordinated claim behavior
-
-**Example:**
-If multiple workers file claims in a zone with no rainfall, the graph detects an abnormal cluster and flags it as fraud.
-
-**Output:**
-- Graph-based fraud risk score
-- Worker trust score (used in decision layer)
-
-This approach is inspired by **InfDetect**, a large-scale graph-based fraud detection system used in insurance.
 
 ### Composite Risk Score
 
