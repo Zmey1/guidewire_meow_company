@@ -24,7 +24,7 @@
 | Resource | Link |
 |---|---|
 | GitHub Repository | [github.com/Zmey1/guidewire_meow_company](https://github.com/Zmey1/guidewire_meow_company) |
-| 2-Minute Video | *(add link before submission)* |
+| 2-Minute Video | https://drive.google.com/file/d/1X9SXbZxBWjKKil4Y2ETg2zP6nA7f1Py1/view?usp=sharing |
 | Figma Prototype | https://www.figma.com/make/FdffYpiBuhjjJhAixYDxBk/figma-prototype?p=f&t=5peWyRBPFzFzBOe8-0 |
 
 ---
