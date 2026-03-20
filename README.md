@@ -25,7 +25,7 @@
 |---|---|
 | GitHub Repository | [github.com/Zmey1/guidewire_meow_company](https://github.com/Zmey1/guidewire_meow_company) |
 | 2-Minute Video | *(add link before submission)* |
-| Figma Prototype | *(add link before submission)* |
+| Figma Prototype | https://www.figma.com/make/FdffYpiBuhjjJhAixYDxBk/figma-prototype?p=f&t=5peWyRBPFzFzBOe8-0 |
 
 ---
 
@@ -51,20 +51,19 @@ We chose grocery and q-commerce delivery (Zepto, Blinkit, Swiggy Instamart) beca
 
 ---
 
+---
 ## Platform Choice — Mobile App
 
 ShiftSure is a **React Native (Expo) mobile application**, not a web app. This is a deliberate product decision:
 
 - Q-commerce riders operate entirely through partner mobile apps (Zepto Partner, Blinkit Rider, Swiggy Delivery). A native app fits their existing workflow — they will not open a browser mid-shift.
 - **Push notifications** are non-negotiable. When a disruption triggers a payout, the rider must receive an instant alert. Native FCM push is reliable; web push on Android is not.
-- **Background GPS** (with consent) enables zone-presence fraud validation — confirming the rider was actually in the affected zone during the disruption window. This requires native device access.
-- **Offline-first caching** matters because riders frequently operate in low-connectivity areas (basement dark-store zones, dense urban pockets). The app caches policy status and wallet balance locally and syncs on reconnect.
+- **Offline-first caching** matters because riders frequently operate in low-connectivity areas (basement dark-store zones, dense urban pockets). The app caches policy status, pool health, and wallet balance locally and syncs on reconnect.
 - React Native + Expo delivers both Android and iOS from a single codebase, keeping build speed on par with a web approach.
 
-The **admin / insurer dashboard** is a separate React web app (Vite + Tailwind) — admins work on desktops and need wide-screen layouts for analytics, loss ratio tracking, and claims queues.
+The **admin / insurer dashboard** is a separate React web app (Vite + Tailwind) — admins work on desktops and need wide-screen layouts for analytics, pool monitoring, loss ratio tracking, and claims queues.
 
 ---
-
 ## Coverage Scope
 
 ShiftSure covers **loss of income only**. Coverage applies when a verified parametric disruption overlaps with the rider's declared active shift in their zone.
@@ -92,15 +91,19 @@ ShiftSure covers **loss of income only**. Coverage applies when a verified param
 
 ### Core Scenario
 
-Ravi buys a ShiftSure Standard plan (Rs. 59/week) before his work week. He declares his shift as 5 PM – 11 PM in the Koramangala zone. On Wednesday evening, heavy rain begins and the dark store pauses dispatch entirely.
+Ravi buys a ShiftSure Standard plan before his work week. His premium enters the mutual pool for his assigned dark store in the Koramangala zone. He declares his shift as 5 PM – 11 PM.
+
+On Wednesday evening, heavy rain begins and the dark store pauses dispatch entirely.
 
 **ShiftSure detects:**
-- Rain >= 25 mm/hr in his zone (Tier 2 trigger)
+- **Peer consensus:** majority of insured riders at Ravi's dark store go idle within minutes → high consensus, event auto-validated
+- **Weather corroboration:** rainfall crosses Tier 2 threshold in his zone
 - Flood/waterlogging signal active
-- Dispatch outage for his assigned dark store
+- Dispatch outage confirmed for his assigned dark store
 - Shift overlap confirmed: his 17:00–23:00 declared slot overlaps the trigger window
 
-**Result:** The platform automatically computes a composite risk score (84 — Full payout tier), estimates his protected shift income (Rs. 420), applies a 1.0 payout multiplier, and credits Rs. 420 to his UPI wallet. No action required from Ravi.
+**Result:**  
+The platform computes a composite risk score (**Full payout tier**), estimates his protected shift income, applies the payout multiplier, and credits the payout to his UPI wallet, drawn from the dark-store pool. No action is required from Ravi.
 
 ---
 
@@ -151,7 +154,9 @@ All five triggers require the disruption window to overlap with the rider's decl
 | Tier 1 (AQI) | AQI >= 300 (Hazardous) | 50% of eligible shift income |
 | Tier 2 (AQI) | AQI >= 400 (Severe) | 80% of eligible shift income |
 
+<<<<<<< HEAD
 *Source: OpenWeatherMap free tier (temperature/heat index + Air Pollution API — same key)*
+=======
 
 ### Composite Risk Score
 
@@ -175,6 +180,43 @@ Score 40–59  → Tier 1 payout
 Score 60–79  → Tier 2 payout
 Score ≥ 80   → Full payout
 ```
+
+---
+### Graph Intelligence (InfDetect-Inspired)
+---
+ShiftSure extends traditional fraud detection using a **graph-based intelligence layer** that models relationships between entities instead of evaluating claims in isolation.
+
+**Graph Model:**
+
+Nodes:
+- Worker
+- Location (Zone)
+- Weather Event
+- Claim
+- Device (GPS / Phone)
+
+Edges:
+- Worker → Location
+- Worker → Claim
+- Location → Weather Event
+- Worker → Device
+
+**What it detects:**
+- Clustered claims in the same zone
+- Mismatch between claims and real-world events
+- Shared devices across multiple accounts
+- Repeated or coordinated claim behavior
+
+**Example:**
+If multiple workers file claims in a zone with no rainfall, the graph detects an abnormal cluster and flags it as fraud.
+
+**Output:**
+- Graph-based fraud risk score
+- Worker trust score (used in decision layer)
+
+This approach is inspired by **InfDetect**, a large-scale graph-based fraud detection system used in insurance.
+>>>>>>> 8714640 (video left, removed some extra fillers, added adversarial defense against gps spoofing)
+
 
 ---
 
@@ -362,6 +404,77 @@ ShiftSure uses a **multi-layer fraud detection pipeline** combining rules, anoma
 
 Final decision is based on a **combined fraud score + graph risk score**.
 
+---
+
+## Adversarial Defense & Anti-Spoofing Strategy
+
+### The Attack Scenario
+
+A sophisticated syndicate of 500 delivery workers in a tier-1 city coordinates via Telegram groups. They use GPS-spoofing applications to fake their locations, making it appear they are stranded in a severe red-alert weather zone while actually resting at home. They trigger mass false claims simultaneously, aiming to drain the liquidity pool.
+
+ShiftSure's defense doesn't depend on detecting spoofed GPS. It operates on layers that make this attack structurally unviable.
+
+---
+
+### Why This Attack Fails Against ShiftSure
+
+#### Defense 1 — Pool Fragmentation + Peer Consensus
+
+The 500 attackers are not in one pool. They are spread across dozens of dark-store pools of 15–30 members each. Each pool is an isolated risk unit — draining one pool does not touch another.
+
+Within any single pool, the attack collapses against peer consensus:
+```text
+Pool of 25 members, 10 are attackers:
+- 10 attackers claim simultaneously (spoofing GPS)
+- 15 legitimate riders are still actively delivering
+  (the weather is fine — they're working normally)
+
+Consensus ratio = 10/25 = 40%
+→ Weather API cross-referenced: no red-alert in this zone
+→ Corroboration FAILS → Claims flagged, not auto-approved
+```
+
+The system doesn't ask "is each rider's GPS valid?" — it asks "did the zone actually experience a disruption?" If 15 out of 25 riders are still delivering normally, the zone clearly isn't in crisis. The attackers are claiming a disruption that the majority of their own pool contradicts.
+
+For the attack to succeed, the syndicate would need **>70% of every pool they're in** — requiring them to recruit the vast majority of riders at every dark store in the city. At that scale, it's no longer a hidden operation.
+
+#### Defense 2 — Graph Intelligence Detects the Coordination
+
+This is where InfDetect-inspired graph analysis catches what individual checks miss.
+
+Normal city-wide disruption: high consensus within every affected pool. Riders within the same pool claim on the same events because they genuinely share the same conditions.
+
+Syndicate attack: **low consensus within pools, but high correlation across pools.** 500 riders across 30+ pools all claim in the same narrow window — but only the syndicate members claim, not their legitimate poolmates.
+```text
+Syndicate co-claim pattern:
+  Pool #7:  10/25 members claim (low consensus)
+  Pool #12: 8/28 members claim  (low consensus)
+  Pool #19: 12/30 members claim (low consensus)
+  ...across 30 pools simultaneously
+
+→ Cross-pool correlation WITH low intra-pool consensus
+→ Structurally opposite to a real disruption
+→ Graph identifies dense co-claim subgraph spanning pools
+   while sparsely connected to legitimate poolmates
+→ FRAUD RING FLAGGED
+```
+
+These two patterns — real event vs coordinated attack — look completely different in graph space. Legitimate events produce high consensus everywhere. Syndicate events produce low consensus inside pools with suspicious correlation between pools. No GPS check required to distinguish them.
+
+---
+
+### Combined Defense
+```text
+Pool Fragmentation:  500 attackers split across 30+ isolated pools.
+                     Cannot overwhelm the system from a single point.
+
+Peer Consensus:      Low intra-pool consensus exposes fake disruptions
+                     without checking GPS coordinates.
+
+Graph Intelligence:  Cross-pool correlation + low intra-pool consensus
+                     = unmistakable fraud ring signature detected
+                     before payouts are issued.
+```
 
 ---
 
@@ -430,44 +543,7 @@ Final decision is based on a **combined fraud score + graph risk score**.
 
 ---
 
-## Business Model
 
-| Model | Description | Viability |
-|---|---|---|
-| **B2C Direct** | Riders pay Rs. 39–89/week through the app. Weekly billing matches their earning cycle. Rider owns their policy and receives payouts to their UPI wallet. | Primary — viable at 5,000+ riders/city with geographic risk diversification |
-| **B2B Platform Partnership** | Zepto/Blinkit/Swiggy Instamart subsidise coverage as a rider welfare tool, paying Rs. 50–150/rider/month. Rider still controls their policy. | Distribution accelerator — reduces rider acquisition cost to near zero |
-| **SaaS / Government Scheme** | License the trigger engine and AI models to existing insurers or state welfare schemes. | Future — precedent: PM-Fasal Bima Yojana uses the same parametric model for crop insurance |
-
----
-
-## Project Structure
-
-```
-guidewire_meow_company/
-├── mobile/                      # React Native + Expo (Rider App)
-│   └── src/
-│       ├── screens/             # Onboarding, Dashboard, Policy, Wallet, RiskOutlook
-│       ├── components/
-│       ├── services/            # API client, push notification handler, gpsLogger
-│       └── store/               # Zustand state management
-├── admin-dashboard/             # React + Vite + Tailwind (Insurer Web Dashboard)
-│   └── src/
-│       ├── pages/               # Overview, Claims, Zones, Fraud, Predictions
-│       ├── components/
-│       └── store/
-├── backend/                     # Node.js + Express
-│   ├── routes/                  # auth, policies, claims, wallet, zones, admin, forecast, gps
-│   ├── models/                  # Mongoose schemas
-│   ├── services/                # triggerEngine.js, scheduler.js, fraudChecker.js,
-│   │                            #   forecastEngine.js, gpsLogger.js
-│   └── scripts/
-│       └── seed.js              # Demo data seeder
-├── ai-service/                  # Python + FastAPI
-│   ├── models/                  # risk_score.py, income_predict.py, loss_calc.py, forecast_risk.py
-│   └── main.py
-└── README.md
-
-```
 
 ## Roadmap
 
