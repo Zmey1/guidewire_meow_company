@@ -91,7 +91,7 @@ ShiftSure covers **loss of income only**. Coverage applies when a verified param
 
 ### Core Scenario
 
-Ravi buys a ShiftSure Standard plan before his work week. His premium enters the mutual pool for his assigned dark store in the Koramangala zone. He declares his shift as 5 PM – 11 PM.
+Ravi buys a ShiftSure Standard plan before his work week. His premium enters the mutual pool for his assigned dark store in the Koramangala zone. He declares his shift as 5 PM s– 11 PM.
 
 On Wednesday evening, heavy rain begins and the dark store pauses dispatch entirely.
 
@@ -154,9 +154,7 @@ All five triggers require the disruption window to overlap with the rider's decl
 | Tier 1 (AQI) | AQI >= 300 (Hazardous) | 50% of eligible shift income |
 | Tier 2 (AQI) | AQI >= 400 (Severe) | 80% of eligible shift income |
 
-<<<<<<< HEAD
-*Source: OpenWeatherMap free tier (temperature/heat index + Air Pollution API — same key)*
-=======
+
 
 ### Composite Risk Score
 
@@ -215,7 +213,6 @@ If multiple workers file claims in a zone with no rainfall, the graph detects an
 - Worker trust score (used in decision layer)
 
 This approach is inspired by **InfDetect**, a large-scale graph-based fraud detection system used in insurance.
->>>>>>> 8714640 (video left, removed some extra fillers, added adversarial defense against gps spoofing)
 
 
 ---
