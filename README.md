@@ -1,6 +1,6 @@
 # ShiftSure
 
-> **AI-Powered Parametric Income Protection for Grocery & Q-Commerce Delivery Partners**
+> **AI Based Micro Pool  Parametric Income Protection for Grocery & Q-Commerce Delivery Partners**
 
 [![Hackathon](https://img.shields.io/badge/Guidewire-DEVTrails%202026-orange)](https://github.com/Zmey1/guidewire_meow_company)
 [![Phase](https://img.shields.io/badge/Phase-Seed%20%2F%20Phase%201-blue)]()
