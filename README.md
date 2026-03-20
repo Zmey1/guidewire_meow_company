@@ -49,7 +49,6 @@ We chose grocery and q-commerce delivery (Zepto, Blinkit, Swiggy Instamart) beca
 - Income loss is **directly tied to measurable, verifiable real-world events** — exactly what parametric insurance is designed for
 - No equivalent protection product exists for this cohort today
 
----
 
 ---
 ## Platform Choice — Mobile App
