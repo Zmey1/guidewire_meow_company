@@ -157,6 +157,8 @@ For each active zone:
   2. Fetch GET /mock/flood/:zone_id → flood_signal                  [mock]
   3. Fetch GET /mock/dispatch/:dark_store_id → dispatch_outage      [mock]
   4. POST to AI /risk-score → composite score + tier
+       Pass zone_restriction: false for all automated cycles.
+       Only POST /admin/trigger with trigger_type "zone_restriction" passes true.
   5. Update zones.current_risk_score with computed score
   6. If score >= 40:
        Find workers: active policy + current time overlaps shift_slots
