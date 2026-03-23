@@ -82,8 +82,15 @@ Expo Push Notification Service (no FCM setup required for demo). Push token is s
 
 /policies
   GET  /premium         Calculate dynamic premium for a plan tier
+                        Query param: plan (lite/standard/plus)
+                        Zone and pool surplus resolved server-side from the
+                        authenticated worker's zone_id and their pool's
+                        current surplus field — no additional client params needed
                         Calls AI service /calculate-premium internally
   POST /purchase        Buy weekly policy, store shift slots
+                        Creates pool document if none exists for this
+                        dark_store_id + week_start (upsert pattern)
+                        pool_id on policy = pools._id of that document
   GET  /current         Active policy for logged-in rider
 
 /claims
@@ -108,15 +115,26 @@ Expo Push Notification Service (no FCM setup required for demo). Push token is s
 
 ```
 workers         _id, name, phone, password_hash, zone_id, dark_store_id,
-                weekly_income_band, push_token, created_at
+                weekly_income_band (integer, rupees/week e.g. 12000),
+                push_token, created_at
 
 policies        _id, worker_id, plan (lite/standard/plus), week_start,
-                week_end, shift_slots[], premium_paid, status, pool_id
+                week_end, shift_slots[], premium_paid, status,
+                weekly_cap (integer, rupees — max payout this week),
+                payouts_issued_this_week (integer, running total),
+                pool_id (MongoDB ObjectId referencing pools._id)
 
 claims          _id, worker_id, policy_id, trigger_event_id, trigger_type,
                 risk_score, payout_amount, eligible_hours, created_at
 
-wallets         _id, worker_id, balance, transactions[]
+wallets         _id, worker_id, balance,
+                transactions[] {
+                  type: "payout" | "rebate",
+                  amount,
+                  description,
+                  claim_id (ObjectId, optional — present for payout type),
+                  created_at
+                }
 
 zones           _id, name, city, lat, lng, base_orders_per_day,
                 historical_disruption_rate, current_risk_score
@@ -134,20 +152,32 @@ pools           _id, dark_store_id, zone_id, week_start, week_end,
 ```
 For each active zone:
   1. Fetch OpenWeatherMap API → rainfall_mm, heat_index, aqi       [real]
+       If OpenWeatherMap call fails → log error, skip zone this cycle
+       (do not default to zero — that would suppress triggers silently)
   2. Fetch GET /mock/flood/:zone_id → flood_signal                  [mock]
   3. Fetch GET /mock/dispatch/:dark_store_id → dispatch_outage      [mock]
   4. POST to AI /risk-score → composite score + tier
-  5. If score >= 40:
+  5. Update zones.current_risk_score with computed score
+  6. If score >= 40:
        Find workers: active policy + current time overlaps shift_slots
-       POST to AI /predict-income → payout_amount per worker
-       Insert claim record
-       Credit wallet (add to balance + transaction log)
+       Per worker:
+         POST to AI /predict-income (include tier) → payout_amount
+         Apply weekly cap: payout = min(payout_amount,
+                           policy.weekly_cap - policy.payouts_issued_this_week)
+         If capped payout > 0:
+           Insert claim record
+           Credit wallet (add to balance + transaction log)
+           Increment policy.payouts_issued_this_week
        Record trigger_event
-       Send Expo push notification
+       Send Expo push notification (fire-and-forget — failure does not
+         roll back wallet credit or claim record)
        Update pool (increment total_claimed)
 ```
 
 The manual admin trigger at `POST /admin/trigger` runs the same pipeline from step 4 onward, bypassing the API polling phase.
+
+**Pool surplus settlement (weekly, runs every Monday 00:00 via node-cron):**
+For Phase 2, pool surplus is a manually seeded value in `pools.surplus`. A settlement cron is not required for the demo — seed realistic surplus values in the DB seed script so the premium rebate displays correctly during the demo.
 
 ---
 
@@ -202,8 +232,8 @@ Output:
 **POST /predict-income**
 ```
 Input:
-  weekly_income_band, shift_slots[], trigger_window_start,
-  trigger_window_end, zone_density_factor
+  weekly_income_band (integer, rupees/week), tier (none/tier1/tier2/full),
+  shift_slots[], trigger_window_start, trigger_window_end, zone_density_factor
 
 Processing:
   base_hourly_rate     = weekly_income_band / total_declared_hours
@@ -258,10 +288,12 @@ All sourced as described in the README. For Phase 2:
 | Heavy Rain | OpenWeatherMap API (real) | Automated |
 | Flood/Waterlogging | Mock feed at `/mock/flood/:zone_id` | Automated + Manual |
 | Dark-Store Outage | Mock feed at `/mock/dispatch/:dark_store_id` | Automated + Manual |
-| Zone Restriction | Admin flag via `POST /admin/trigger` | Manual only |
+| Zone Restriction | Admin flag via `POST /admin/trigger` with `trigger_type: "zone_restriction"` — sets `zone_restriction: true` in the risk score input, producing `restriction_score = 80` | Manual only |
 | Extreme Heat / AQI | OpenWeatherMap API (real) | Automated |
 
 The mock feeds are seeded with controllable values. Toggling `dispatch_outage = true` for a dark store via an internal admin call fires the next cron cycle (or instantly via the simulate button).
+
+Valid `trigger_type` enum values for `POST /admin/trigger`: `heavy_rain`, `flood`, `dispatch_outage`, `zone_restriction`, `extreme_heat`.
 
 ---
 
