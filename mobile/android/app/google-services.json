@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "67264024586",
+    "project_id": "shiftsure-a34e9",
+    "storage_bucket": "shiftsure-a34e9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:67264024586:android:2d6d6ffed67b7890e60ff3",
+        "android_client_info": {
+          "package_name": "com.shiftsure.admin"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCecB3jX0I6vyvin0yW1TI76UfvpvgKCHI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:67264024586:android:6c192a25caa3dc81e60ff3",
+        "android_client_info": {
+          "package_name": "com.shiftsure.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCecB3jX0I6vyvin0yW1TI76UfvpvgKCHI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

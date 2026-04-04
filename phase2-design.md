@@ -1,4 +1,4 @@
-# ShiftSure Phase 2 — Design Spec
+# ShiftSure Design Spec
 
 **Date:** 2026-03-23
 **Deadline:** 2026-04-04
@@ -24,61 +24,75 @@ Single repository, 4 top-level folders. Each service is independently runnable w
 
 ```
 shiftsure/
-├── mobile/     React Native + Expo (Expo Router, tab navigation)
-├── backend/    Node.js + Express + Mongoose
-├── admin/      React + Vite + Tailwind CSS
+├── mobile/     Flutter (Android + iOS) — Dart, Firebase Auth, Riverpod
+├── backend/    Node.js + Express + Firebase Admin SDK (Firestore)
+├── admin/      Flutter Web — Dart, Firebase Auth, Cloud Firestore, Riverpod
 └── ai/         Python + FastAPI
 ```
 
-All services communicate over HTTP. The backend is the single integration point — mobile and admin talk only to the backend; the backend calls the AI service internally.
+All services communicate over HTTP. The backend is the single integration point — mobile and admin talk only to the backend; the backend calls the AI service internally. Authentication is handled by **Firebase Auth** across all clients; the backend verifies Firebase ID tokens via the **Firebase Admin SDK**.
 
 ---
 
-## Mobile App (React Native + Expo)
+## Mobile App (Flutter — Android + iOS)
 
-**Scaffolding:** `npx create-expo-app mobile` with Expo Router.
+**Scaffolding:** `flutter create mobile` with `firebase_core`, `firebase_auth`, `flutter_riverpod`, `google_fonts`, `http`, `intl` dependencies.
 
 ### Navigation Structure
 
 ```
-(auth)/
-  login           Phone + password login, returns JWT stored in SecureStore
-  register        Onboarding: name, phone, zone, dark store, income band
+screens/
+  auth/
+    login_screen          Phone-as-email + password login via Firebase Auth
+    register_screen       Onboarding: name, phone, zone, dark store, income band
+  splash_screen           Shown while Firebase auth state resolves
+  main_tabs               Bottom NavigationBar with 4 tabs:
 
-(tabs)/
-  index           Home/Dashboard — active policy summary, wallet balance,
-                  zone risk level, recent payout history
-  policy          Policy Management — buy/renew weekly plan (Lite/Standard/Plus),
-                  dynamic premium displayed before purchase,
-                  declare shift slots for the week
-  claims          Claims History — list of auto-triggered payouts with
-                  reason, amount, timestamp, trigger type
-                  (no manual claim button — zero-touch only)
-  wallet          Wallet — current balance, payout history,
-                  pool surplus rebate received this week
+  home/
+    home_screen            Dashboard — active policy summary, wallet balance,
+                           zone risk level, recent payout history
+  policy/
+    policy_screen          Policy Management — buy/renew weekly plan (Lite/Standard/Plus),
+                           dynamic premium displayed before purchase,
+                           declare shift slots for the week
+  claims/
+    claims_screen          Claims History — list of auto-triggered payouts with
+    claim_file_screen      reason, amount, timestamp, trigger type
+                           (no manual claim button — zero-touch only)
+  wallet/
+    wallet_screen          Wallet — current balance, payout history,
+                           pool surplus rebate received this week
 ```
 
-Auth flow is outside the tab layout. After JWT is stored, user lands on the tab layout. If no active policy on the Home screen, a prompt directs to the Policy tab.
+Auth flow uses `StreamBuilder<User?>` on `FirebaseAuth.instance.authStateChanges()`. When authenticated, user lands on `MainTabs`. If no active policy on the Home screen, a prompt directs to the Policy tab.
 
 ### Push Notifications
 
-Expo Push Notification Service (no FCM setup required for demo). Push token is stored at registration. Notification format: *"Payout of ₹340 credited — Heavy rain trigger in Koramangala zone."*
+Firebase Cloud Messaging (FCM) via the Firebase project. Push token is stored at registration. Notification format: *"Payout of ₹340 credited — Heavy rain trigger in Koramangala zone."*
 
 ---
 
-## Backend (Node.js + Express)
+## Backend (Node.js + Express + Firebase Admin SDK)
 
-**Auth:** JWT + bcrypt. Single middleware validates token on protected routes. Admin role encoded in JWT payload.
+**Stack:** Express.js with `firebase-admin` SDK. No MongoDB/Mongoose — all data lives in **Cloud Firestore**. Authentication uses **Firebase Auth** (ID token verification via Admin SDK), not custom JWT.
+
+**Environment variables (.env):**
+```
+GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json
+FIREBASE_PROJECT_ID=shiftsure-a34e9
+OWM_API_KEY=<openweathermap-key>
+AI_SERVICE_URL=http://localhost:8001
+PORT=3000
+```
 
 ### API Routes (all prefixed `/api`)
 
-```
-/auth
-  POST /register        Create worker account, return JWT
-  POST /login           Validate credentials, return JWT
+All authenticated routes expect a Firebase ID token in the `Authorization: Bearer <token>` header. The `auth` middleware verifies the token via `admin.auth().verifyIdToken()` and attaches `req.uid`, `req.role`, and `req.workerData` to the request. Registration is done client-side via Firebase Auth; the backend creates the corresponding Firestore worker document.
 
+```
 /workers
   GET  /me              Current worker profile + zone + dark store
+                        (reads Firestore 'workers/{uid}' document)
 
 /policies
   GET  /premium         Calculate dynamic premium for a plan tier
@@ -90,7 +104,7 @@ Expo Push Notification Service (no FCM setup required for demo). Push token is s
   POST /purchase        Buy weekly policy, store shift slots
                         Creates pool document if none exists for this
                         dark_store_id + week_start (upsert pattern)
-                        pool_id on policy = pools._id of that document
+                        pool_id on policy = Firestore doc ID of that pool document
   GET  /current         Active policy for logged-in rider
 
 /claims
@@ -99,87 +113,105 @@ Expo Push Notification Service (no FCM setup required for demo). Push token is s
 /wallet
   GET  /                Balance + transaction log
 
-/admin                  (admin JWT required)
+/zones
+  GET  /risk            Current zone risk status for the authenticated rider's zone
+
+/admin                  (admin role required — checked via req.role from Firestore)
   GET  /claims          All auto-processed claims — filter by zone/date/trigger
   GET  /pools           Pool health per dark store
   POST /trigger         Manual disruption injection — { zone_id, trigger_type, severity }
                         Skips API polling, injects mock values, runs full payout pipeline
   GET  /zones           All zones with current risk status
-
-/mock                   Internal mock feeds (swappable for real APIs)
-  GET  /flood/:zone_id          Returns { flood_signal, severe_flood_signal }
-  GET  /dispatch/:dark_store_id Returns { dispatch_outage }
 ```
 
-### MongoDB Collections
+### Firestore Collections Schema
+
+All data uses **Cloud Firestore** collections. Document IDs are auto-generated unless noted. Firebase Auth UID is used as the document ID for `workers`.
 
 ```
-workers         _id, name, phone, password_hash, zone_id, dark_store_id,
-                weekly_income_band (integer, rupees/week e.g. 12000),
-                push_token, created_at
+workers/{uid}       name, phone, zone_id, dark_store_id,
+                    weekly_income_band (integer, rupees/week e.g. 12000),
+                    role ("rider" | "admin"), push_token, created_at
 
-policies        _id, worker_id, plan (lite/standard/plus), week_start,
-                week_end, shift_slots[], premium_paid, status,
-                weekly_cap (integer, rupees — max payout this week),
-                payouts_issued_this_week (integer, running total),
-                pool_id (MongoDB ObjectId referencing pools._id)
+policies/{id}       worker_id (uid), plan (lite/standard/plus), week_start,
+                    week_end, shift_slots[], premium_paid, status,
+                    weekly_cap (integer, rupees — max payout this week),
+                    payouts_issued_this_week (integer, running total),
+                    pool_id (Firestore doc ID referencing pools/{id})
 
-claims          _id, worker_id, policy_id, trigger_event_id, trigger_type,
-                risk_score, payout_amount, eligible_hours, created_at
+claims/{id}         worker_id (uid), policy_id, trigger_event_id, trigger_type,
+                    risk_score, payout_amount, eligible_hours, created_at
 
-wallets         _id, worker_id, balance,
-                transactions[] {
-                  type: "payout" | "rebate",
-                  amount,
-                  description,
-                  claim_id (ObjectId, optional — present for payout type),
-                  created_at
-                }
+wallets/{uid}       worker_id (uid), balance,
+                    transactions (subcollection or array) {
+                      type: "payout" | "rebate",
+                      amount,
+                      description,
+                      claim_id (optional — present for payout type),
+                      created_at
+                    }
 
-zones           _id, name, city, lat, lng, base_orders_per_day,
-                historical_disruption_rate, current_risk_score
+zones/{id}          name, city, lat, lng, base_orders_per_day,
+                    historical_disruption_rate, current_risk_score
 
-trigger_events  _id, zone_id, trigger_type, risk_score, tier,
-                source (auto/manual), rainfall_mm, heat_index, aqi,
-                flood_signal, dispatch_outage, created_at
+trigger_events/{id} zone_id, trigger_type, risk_score, tier,
+                    source (auto/manual), rainfall_mm, heat_index, aqi,
+                    flood_signal, dispatch_outage, created_at
 
-pools           _id, dark_store_id, zone_id, week_start, week_end,
-                total_collected, total_claimed, surplus, reserve_used
+pools/{id}          dark_store_id, zone_id, week_start, week_end,
+                    total_collected, total_claimed, surplus, reserve_used
+
+mock_state/{id}     flood_signal, severe_flood_signal, dispatch_outage
+                    (seeded per zone/dark_store for demo controllability)
+```
+
+### Auth Middleware
+
+```
+auth.js:
+  1. Extract Bearer token from Authorization header
+  2. Verify via admin.auth().verifyIdToken(token)
+  3. Fetch worker doc from Firestore 'workers/{decoded.uid}'
+  4. Attach req.uid, req.role, req.workerData to request
+
+adminAuth.js:
+  1. Run auth.js middleware first
+  2. If req.role !== 'admin' → 403 Forbidden
 ```
 
 ### Trigger Engine (node-cron, every 15 minutes)
 
 ```
-For each active zone:
+For each active zone (Firestore query on 'zones' collection):
   1. Fetch OpenWeatherMap API → rainfall_mm, heat_index, aqi       [real]
        If OpenWeatherMap call fails → log error, skip zone this cycle
        (do not default to zero — that would suppress triggers silently)
-  2. Fetch GET /mock/flood/:zone_id → flood_signal                  [mock]
-  3. Fetch GET /mock/dispatch/:dark_store_id → dispatch_outage      [mock]
+  2. Read Firestore mock_state doc for zone → flood_signal           [mock]
+  3. Read Firestore mock_state doc for dark_store → dispatch_outage  [mock]
   4. POST to AI /risk-score → composite score + tier
        Pass zone_restriction: false for all automated cycles.
        Only POST /admin/trigger with trigger_type "zone_restriction" passes true.
-  5. Update zones.current_risk_score with computed score
+  5. Update zones/{id}.current_risk_score in Firestore
   6. If score >= 40:
-       Find workers: active policy + current time overlaps shift_slots
+       Query Firestore: workers with active policy + current time overlaps shift_slots
        Per worker:
          POST to AI /predict-income (include tier) → payout_amount
          Apply weekly cap: payout = min(payout_amount,
                            policy.weekly_cap - policy.payouts_issued_this_week)
          If capped payout > 0:
-           Insert claim record
-           Credit wallet (add to balance + transaction log)
-           Increment policy.payouts_issued_this_week
-       Record trigger_event
-       Send Expo push notification (fire-and-forget — failure does not
+           Insert claim document in Firestore 'claims' collection
+           Credit wallet (update balance + add transaction in Firestore)
+           Increment policy.payouts_issued_this_week in Firestore
+       Record trigger_event document in Firestore
+       Send FCM push notification (fire-and-forget — failure does not
          roll back wallet credit or claim record)
-       Update pool (increment total_claimed)
+       Update pool document (increment total_claimed) in Firestore
 ```
 
 The manual admin trigger at `POST /admin/trigger` runs the same pipeline from step 4 onward, bypassing the API polling phase.
 
 **Pool surplus settlement (weekly, runs every Monday 00:00 via node-cron):**
-For Phase 2, pool surplus is a manually seeded value in `pools.surplus`. A settlement cron is not required for the demo — seed realistic surplus values in the DB seed script so the premium rebate displays correctly during the demo.
+For Phase 2, pool surplus is a manually seeded value in the Firestore `pools` document's `surplus` field. A settlement cron is not required for the demo — seed realistic surplus values via the `scripts/seed.js` script so the premium rebate displays correctly during the demo.
 
 ---
 
@@ -253,12 +285,12 @@ Output:
 
 ---
 
-## Admin Dashboard (React + Vite + Tailwind)
+## Admin Dashboard (Flutter Web — Dart + Firebase)
 
-4 pages, desktop-first layout.
+4 screens, desktop-first layout. Uses `firebase_auth`, `cloud_firestore`, `flutter_riverpod`, `google_fonts`, `http` packages.
 
 ```
-/login          Admin credentials → JWT stored in localStorage
+login_screen      Admin credentials → Firebase Auth (authStateChanges stream)
 
 /dashboard      Overview cards:
                   Active pools, total riders insured this week,
@@ -288,12 +320,12 @@ All sourced as described in the README. For Phase 2:
 | Trigger | Source | Status |
 |---|---|---|
 | Heavy Rain | OpenWeatherMap API (real) | Automated |
-| Flood/Waterlogging | Mock feed at `/mock/flood/:zone_id` | Automated + Manual |
-| Dark-Store Outage | Mock feed at `/mock/dispatch/:dark_store_id` | Automated + Manual |
+| Flood/Waterlogging | Firestore `mock_state` document per zone | Automated + Manual |
+| Dark-Store Outage | Firestore `mock_state` document per dark store | Automated + Manual |
 | Zone Restriction | Admin flag via `POST /admin/trigger` with `trigger_type: "zone_restriction"` — sets `zone_restriction: true` in the risk score input, producing `restriction_score = 80` | Manual only |
 | Extreme Heat / AQI | OpenWeatherMap API (real) | Automated |
 
-The mock feeds are seeded with controllable values. Toggling `dispatch_outage = true` for a dark store via an internal admin call fires the next cron cycle (or instantly via the simulate button).
+The mock state is stored in Firestore `mock_state` documents, seeded with controllable values. Toggling `dispatch_outage = true` for a dark store in Firestore fires the next cron cycle (or instantly via the simulate button).
 
 Valid `trigger_type` enum values for `POST /admin/trigger`: `heavy_rain`, `flood`, `dispatch_outage`, `zone_restriction`, `extreme_heat`.
 
@@ -320,7 +352,7 @@ On the Policy screen, before purchase:
 
 1. Rider selects plan tier (Lite / Standard / Plus)
 2. App calls `GET /api/policies/premium?plan=standard`
-3. Backend fetches zone risk + pool surplus from DB, calls AI `/calculate-premium`
+3. Backend fetches zone risk + pool surplus from Firestore, calls AI `/calculate-premium`
 4. Response returned: premium breakdown shown to rider
    ```
    Base price:       ₹89
@@ -339,6 +371,8 @@ On the Policy screen, before purchase:
 - **ML deferred:** All AI endpoints are rule-based for Phase 2. The API contract is stable — ML models slot in without changing callers.
 - **No Razorpay:** Wallet is a mock balance. No real payments for Phase 2.
 - **GPS is simulated:** No real device GPS required. Zone is set at registration.
-- **Expo Push:** Used over FCM for simplicity — sufficient for demo purposes.
-- **Mock feeds run inside backend:** No separate mock server needed.
-- **Admin auth is separate role:** Same JWT system, `role: "admin"` in payload, checked by middleware.
+- **Firebase Auth:** Used for authentication across mobile (Flutter), admin (Flutter Web), and backend (Firebase Admin SDK token verification). No custom JWT implementation.
+- **Cloud Firestore:** Used as the sole database. No MongoDB/Mongoose dependency.
+- **FCM Push:** Firebase Cloud Messaging used for push notifications.
+- **Mock state in Firestore:** Mock feeds (flood, dispatch outage) are stored as Firestore documents in `mock_state` collection — no separate mock HTTP server needed.
+- **Admin auth is separate role:** Same Firebase Auth system, `role: "admin"` stored in Firestore worker document, checked by `adminAuth` middleware.

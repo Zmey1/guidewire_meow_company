@@ -1,0 +1,118 @@
+name: ShiftSure Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # 1. Detect changes to run tests selectively
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      ai: ${{ steps.filter.outputs.ai }}
+      backend: ${{ steps.filter.outputs.backend }}
+      mobile: ${{ steps.filter.outputs.mobile }}
+      admin: ${{ steps.filter.outputs.admin }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            ai:
+              - 'ai/**'
+              - '.github/workflows/test.yml'
+            backend:
+              - 'backend/**'
+              - '.github/workflows/test.yml'
+            mobile:
+              - 'mobile/**'
+              - '.github/workflows/test.yml'
+            admin:
+              - 'admin/**'
+              - '.github/workflows/test.yml'
+
+
+  # 4. Mobile Flutter Tests
+  test-mobile:
+    needs: changes
+    if: ${{ needs.changes.outputs.mobile == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+      - name: Run Flutter Tests
+        run: |
+          cd mobile
+          flutter test
+
+  # 5. Admin Flutter Tests
+  test-admin:
+    needs: changes
+    if: ${{ needs.changes.outputs.admin == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+      - name: Run Flutter Tests
+        run: |
+          cd admin
+          flutter test
+
+  # 6. True E2E Pipeline (Live Tests)
+  test-e2e:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.ai == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Install dependencies
+        run: |
+          cd ai && pip install -r requirements.txt
+          cd ../backend && npm install
+      - name: Create Firebase credentials file
+        run: |
+          cat <<'EOF' > backend/serviceAccountKey.json
+          ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          EOF
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/backend/serviceAccountKey.json" >> $GITHUB_ENV
+
+      - name: Run E2E Flow
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          NEO4J_INSTANCE: ${{ secrets.NEO4J_INSTANCE }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USER: ${{ secrets.NEO4J_USER }}
+          OWM_API_KEY: ${{ secrets.OWM_API_KEY }}
+          PORT: ${{ secrets.PORT }}
+        run: |
+          # Spin up AI Service
+          cd ai
+          uvicorn main:app --port 8001 &
+          
+          # Spin up Backend
+          cd ../backend
+          node server.js &
+          
+          # Wait for boot
+          sleep 10
+          
+          # Run the pipeline E2E test suite
+          npm test
