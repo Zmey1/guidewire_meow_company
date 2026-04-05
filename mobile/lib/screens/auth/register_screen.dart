@@ -31,10 +31,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
   ];
   String? _selectedDarkStoreId;
 
-  // Step 3
-  final List<int> _incomeBands = [6000, 9000, 12000, 15000];
-  int? _selectedBand;
-
   bool _loading = false;
   String? _error;
 
@@ -68,17 +64,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Future<void> _submit() async {
-    if (_selectedBand == null) { setState(() => _error = 'Please select income band'); return; }
     setState(() { _loading = true; _error = null; });
     try {
       final email = '${_phoneCtrl.text.trim()}@shiftsure.in';
-      final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(email: email, password: _passCtrl.text.trim());
+      await FirebaseAuth.instance.createUserWithEmailAndPassword(email: email, password: _passCtrl.text.trim());
       // Write worker profile to backend
       await ApiService.post('/workers/register', {
         'name': _nameCtrl.text.trim(),
         'phone': _phoneCtrl.text.trim(),
         'dark_store_id': _selectedDarkStoreId,
-        'weekly_income_band': _selectedBand,
       });
       // No manual navigation needed; main.dart handles it via authStateChanges stream
     } on FirebaseAuthException catch (e) {
@@ -189,30 +183,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget _step3() => SingleChildScrollView(
     padding: const EdgeInsets.all(24),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('Weekly Income', style: GoogleFonts.inter(fontSize: 24, fontWeight: FontWeight.w700, color: Colors.white)),
+      Text('Income Setup', style: GoogleFonts.inter(fontSize: 24, fontWeight: FontWeight.w700, color: Colors.white)),
       const SizedBox(height: 8),
-      Text('Choose your approximate weekly earnings', style: GoogleFonts.inter(color: AppTheme.textSecondary)),
-      const SizedBox(height: 32),
-      ..._incomeBands.map((b) => GestureDetector(
-        onTap: () => setState(() { _selectedBand = b; _error = null; }),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: _selectedBand == b ? AppTheme.primary.withValues(alpha: 0.15) : AppTheme.surface,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: _selectedBand == b ? AppTheme.primary : const Color(0xFF334155)),
-          ),
-          child: Row(children: [
-            const Icon(Icons.currency_rupee_rounded, color: AppTheme.secondary),
-            const SizedBox(width: 12),
-            Text('₹${(b / 1000).toStringAsFixed(0)}K / week', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w500)),
-            const Spacer(),
-            if (_selectedBand == b) const Icon(Icons.check_circle_rounded, color: AppTheme.primary, size: 20),
-          ]),
+      Text('Your weekly income will be fetched automatically from the platform mock API after account creation.', style: GoogleFonts.inter(color: AppTheme.textSecondary)),
+      const SizedBox(height: 24),
+      Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFF334155)),
         ),
-      )),
+        child: Row(
+          children: [
+            const Icon(Icons.cloud_download_rounded, color: AppTheme.secondary),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Source: mock_income_api\nRange: ₹8,000 - ₹15,000 / week',
+                style: GoogleFonts.inter(color: Colors.white, height: 1.4),
+              ),
+            ),
+          ],
+        ),
+      ),
       if (_error != null) ...[Text(_error!, style: GoogleFonts.inter(color: AppTheme.error))],
       const SizedBox(height: 48),
       SizedBox(

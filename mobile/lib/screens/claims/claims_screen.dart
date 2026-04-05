@@ -4,6 +4,11 @@ import '../../services/api_service.dart';
 import '../../theme/app_theme.dart';
 import 'claim_file_screen.dart';
 
+String _formatRupees(dynamic amount) {
+  final numeric = amount is num ? amount : num.tryParse(amount?.toString() ?? '');
+  return (numeric ?? 0).truncate().toString();
+}
+
 class ClaimsScreen extends StatefulWidget {
   const ClaimsScreen({super.key});
   @override
@@ -92,7 +97,7 @@ class _ClaimCard extends StatelessWidget {
           Icon(Icons.flash_on_rounded, color: AppTheme.secondary, size: 20),
           const SizedBox(width: 8),
           Expanded(child: Text(trigger, style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 16))),
-          if (payout != null && status != 'pending_verification') Text('₹$payout', style: GoogleFonts.inter(color: AppTheme.success, fontWeight: FontWeight.w700, fontSize: 18)),
+          if (payout != null && status != 'pending_verification') Text('₹${_formatRupees(payout)}', style: GoogleFonts.inter(color: AppTheme.success, fontWeight: FontWeight.w700, fontSize: 18)),
         ]),
         if (status == 'rejected' && claim['rejection_reason'] != null) ...[
           const SizedBox(height: 12),

@@ -4,6 +4,15 @@ import '../../services/api_service.dart';
 import '../../theme/app_theme.dart';
 import '../main_tabs.dart';
 
+String _formatWorkerTierLabel(String? rawTier) {
+  final tier = (rawTier ?? '').toLowerCase();
+  if (tier == 'low_activity') return 'PARTLY ACTIVE';
+  if (tier == 'regular') return 'ACTIVE';
+  if (tier == 'partly_active') return 'PARTLY ACTIVE';
+  if (tier == 'active') return 'ACTIVE';
+  return 'ACTIVE';
+}
+
 class PolicyScreen extends StatefulWidget {
   const PolicyScreen({super.key});
   @override
@@ -151,7 +160,7 @@ class _PurchaseFlowState extends State<_PurchaseFlow> {
 
   @override
   Widget build(BuildContext context) {
-    final workerTier = (_quote?['worker_tier'] as String? ?? 'REGULAR').toUpperCase().replaceAll('_', ' ');
+    final workerTier = _formatWorkerTierLabel(_quote?['worker_tier'] as String?);
     final effectiveCap = _quote?['effective_weekly_cap'] ?? 0;
 
     return ListView(children: [

@@ -8,10 +8,16 @@ Edges:  FILED, FROM_EVENT, IN_ZONE
 import os
 import logging
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
 
-load_dotenv()
+_AI_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _AI_DIR.parent
+
+# Load AI-local env first, then shared backend env as a fallback for local dev.
+load_dotenv(_AI_DIR / ".env")
+load_dotenv(_REPO_ROOT / "backend" / ".env")
 logger = logging.getLogger(__name__)
 
 _driver = None

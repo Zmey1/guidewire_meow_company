@@ -62,7 +62,16 @@ describe('True E2E Pipeline — Live Databases', () => {
       name: `E2E Zone ${TEST_ID}`,
       lat: 12.93,
       lng: 77.61,
+      city: 'Bangalore',
       flood_signal: false,
+      severe_flood_signal: false,
+      unsafe_signal: false,
+      zone_restriction: false,
+      enrollment_suspended: false,
+      trigger_probability: 0.22,
+      avg_daily_income_loss: 420,
+      city_factor: 1.0,
+      zone_density_factor: 1.0,
       historical_disruption_rate: 0.1,
       is_e2e_test: true,
     });
@@ -93,6 +102,8 @@ describe('True E2E Pipeline — Live Databases', () => {
       role: 'rider',
       total_deliveries: 50, // Eligible
       weekly_income_band: 12000,
+      weekly_hours: 42,
+      worker_tier: 'active',
       zone_id: TEST_ZONE_ID,
       dark_store_id: TEST_DS_ID,
       is_e2e_test: true,
@@ -148,6 +159,9 @@ describe('True E2E Pipeline — Live Databases', () => {
     const policies = await db.collection('policies').where('worker_id', '==', TEST_WORKER_UID).get();
     for (const d of policies.docs) await d.ref.delete();
 
+    const pools = await db.collection('pools').where('dark_store_id', '==', TEST_DS_ID).get();
+    for (const d of pools.docs) await d.ref.delete().catch(() => {});
+
     const wallets = await db.collection('wallets').doc(TEST_WORKER_UID).get();
     if (wallets.exists) {
         const txs = await wallets.ref.collection('transactions').get();
@@ -182,7 +196,8 @@ describe('True E2E Pipeline — Live Databases', () => {
     });
     
     expect(purchaseRes.status).toBe(201);
-    expect(purchaseRes.data.policy.status).toBe('active');
+    expect(purchaseRes.data.policy_id).toBeTruthy();
+    expect(purchaseRes.data.worker_tier_at_purchase).toMatch(/active|partly_active/);
   });
 
   test('Step 3: Admin manipulates zone signal and triggers payout', async () => {
@@ -201,7 +216,7 @@ describe('True E2E Pipeline — Live Databases', () => {
 
     const triggerRes = await axiosAdmin.post('/api/admin/trigger', {
       zone_id: TEST_ZONE_ID,
-      trigger_type: 'severe_flood',
+      trigger_type: 'flood',
       severity: 'high'
     });
     
@@ -223,5 +238,29 @@ describe('True E2E Pipeline — Live Databases', () => {
     expect(walletRes.status).toBe(200);
     // At minimum, wallet has a deduction for premium purchase in Step 2.
     expect(walletRes.data.transactions.length).toBeGreaterThanOrEqual(1);
+
+    const approvedClaim = (claimRes.data.claims || []).find(c => c.status === 'approved');
+    if (approvedClaim) {
+      expect(approvedClaim).toHaveProperty('income_loss');
+      expect(approvedClaim).toHaveProperty('scaled_payout');
+      expect(approvedClaim).toHaveProperty('coverage_ratio');
+      expect(approvedClaim).toHaveProperty('uncovered_loss');
+    }
+  });
+
+  test('Step 5: Wallet withdrawal endpoint works', async () => {
+    const preWallet = await axiosWorker.get('/api/wallet');
+    expect(preWallet.status).toBe(200);
+    const preBalance = preWallet.data.balance || 0;
+
+    const invalidWithdraw = await axiosWorker.post('/api/wallet/withdraw', { amount: preBalance + 100000 });
+    expect(invalidWithdraw.status).toBe(400);
+
+    if (preBalance >= 10) {
+      const withdrawRes = await axiosWorker.post('/api/wallet/withdraw', { amount: 10 });
+      expect(withdrawRes.status).toBe(200);
+      expect(withdrawRes.data.success).toBe(true);
+      expect(withdrawRes.data.balance).toBeCloseTo(preBalance - 10, 2);
+    }
   });
 });

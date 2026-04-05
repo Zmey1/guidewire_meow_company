@@ -5,11 +5,21 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:io';
 
 class ApiService {
-  // Hardcoded for reliable device/emulator support
+  static const String _configuredBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: '',
+  );
+
+  // `API_BASE_URL` can point a physical device to a LAN host.
+  // Without an override, Android defaults to the emulator bridge.
   static String get baseUrl {
+    if (_configuredBaseUrl.isNotEmpty) {
+      return _configuredBaseUrl;
+    }
+
     try {
       if (Platform.isAndroid)
-        return 'http://10.0.2.2:3000/api'; // Android Emulator
+        return 'http://192.168.1.28:3000/api'; // Android Emulator
       return 'http://localhost:3000/api'; // iOS Simulator or Web
     } catch (_) {
       return 'http://localhost:3000/api'; // Fallback

@@ -4,10 +4,21 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import '../../services/api_service.dart';
 import '../../theme/app_theme.dart';
-import '../policy/policy_screen.dart';
-import '../claims/claims_screen.dart';
-import '../wallet/wallet_screen.dart';
-import '../main_tabs.dart';
+import '../main_tab_controller.dart';
+
+String _formatWorkerTierLabel(String? rawTier) {
+  final tier = (rawTier ?? '').toLowerCase();
+  if (tier == 'low_activity') return 'PARTLY ACTIVE';
+  if (tier == 'regular') return 'ACTIVE';
+  if (tier == 'partly_active') return 'PARTLY ACTIVE';
+  if (tier == 'active') return 'ACTIVE';
+  return 'ACTIVE';
+}
+
+String _formatRupees(dynamic amount) {
+  final numeric = amount is num ? amount : num.tryParse(amount?.toString() ?? '');
+  return (numeric ?? 0).truncate().toString();
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -117,7 +128,7 @@ class _PolicyCard extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: () => _switchToPolicy(context),
+              onPressed: _switchToPolicy,
               child: const Padding(
                 padding: EdgeInsets.symmetric(vertical: 12), 
                 child: Text('Get Covered', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
@@ -129,7 +140,7 @@ class _PolicyCard extends StatelessWidget {
     }
 
     final plan = 'COVERED';
-    final workerTier = (worker?['worker_tier'] as String? ?? 'REGULAR').toUpperCase().replaceAll('_', ' ');
+    final workerTier = _formatWorkerTierLabel(worker?['worker_tier'] as String?);
     final cap = policy!['effective_weekly_cap'] ?? policy!['weekly_cap'] ?? 0;
     final used = policy!['payouts_issued_this_week'] ?? 0;
     final remaining = (cap - used).clamp(0, cap);
@@ -175,9 +186,7 @@ class _PolicyCard extends StatelessWidget {
     Text(v, style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
   ]);
 
-  void _switchToPolicy(BuildContext ctx) {
-    Navigator.push(ctx, MaterialPageRoute(builder: (_) => const PolicyScreen()));
-  }
+  void _switchToPolicy() => mainTabIndex.value = 1;
 }
 
 // ── Zone Risk Card ─────────────────────────────────────────────────────────
@@ -256,7 +265,7 @@ class _WalletCard extends StatelessWidget {
       const SizedBox(width: 16),
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('Wallet Balance', style: GoogleFonts.inter(color: AppTheme.textSecondary, fontSize: 13)),
-        Text('₹$balance', style: GoogleFonts.inter(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700)),
+        Text('₹${_formatRupees(balance)}', style: GoogleFonts.inter(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700)),
       ]),
     ]));
   }
@@ -284,7 +293,7 @@ class _ClaimItem extends StatelessWidget {
           Text(claim['trigger_type']?.toString().replaceAll('_', ' ').toUpperCase() ?? '', style: GoogleFonts.inter(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
           Text(status, style: GoogleFonts.inter(color: color, fontSize: 12)),
         ])),
-        Text(claim['payout_amount'] != null && status != 'pending_verification' ? '₹${claim['payout_amount']}' : '...', style: GoogleFonts.inter(color: AppTheme.success, fontWeight: FontWeight.w600)),
+        Text(claim['payout_amount'] != null && status != 'pending_verification' ? '₹${_formatRupees(claim['payout_amount'])}' : '...', style: GoogleFonts.inter(color: AppTheme.success, fontWeight: FontWeight.w600)),
       ]),
     );
   }

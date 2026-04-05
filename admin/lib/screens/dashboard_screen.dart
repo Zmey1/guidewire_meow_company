@@ -23,7 +23,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final data = await ApiService.get('/admin/dashboard');
       if (mounted) setState(() { _stats = data; _loading = false; });
     } catch (_) {
-    } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -41,8 +40,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Text('Simulated Days: ${res['simulated_days']}', style: const TextStyle(color: Colors.white70)),
             Text('Affected Active Riders: ${res['affected_riders']}', style: const TextStyle(color: Colors.white70)),
             Text('Total Projected Payout: ₹${res['total_simulated_payout']}', style: const TextStyle(color: Colors.redAccent)),
-            Text('Projected Global BCR: ${(res['projected_bcr'] * 100).toStringAsFixed(1)}%', style: const TextStyle(color: Colors.white)),
-            Text('Projected Reserve Drop: -₹${res['projected_reserve_balance']}', style: const TextStyle(color: Colors.orangeAccent)),
+            Text('Projected Loss Ratio: ${((res['projected_loss_ratio'] ?? 0) * 100).toStringAsFixed(1)}%', style: const TextStyle(color: Colors.white)),
+            Text('Projected BCR: ${(res['projected_bcr'] ?? 0).toStringAsFixed(2)}x', style: const TextStyle(color: Colors.white)),
+            Text('Projected Reserve Balance: ₹${res['projected_reserve_balance']}', style: TextStyle(color: (res['projected_reserve_balance'] ?? 0) >= 0 ? Colors.greenAccent : Colors.orangeAccent)),
           ]),
           actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close', style: TextStyle(color: Colors.blue)))],
         ));
@@ -59,11 +59,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
-      body: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      body: LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -96,8 +100,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   _StatCard(label: 'Total Collected', value: '₹${_stats?['total_collected'] ?? '--'}', icon: Icons.savings_rounded, color: const Color(0xFF10B981)),
                   _StatCard(label: 'City Reserve', value: '₹${_stats?['city_reserve_level'] ?? '--'}', icon: Icons.account_balance_rounded, color: const Color(0xFF3B82F6)),
                   _StatCard(
-                    label: 'Global BCR (Target <0.7)', 
-                    value: _stats != null && _stats!['total_collected'] > 0 ? '${((_stats!['total_payouts_issued'] / _stats!['total_collected']) * 100).toStringAsFixed(1)}%' : '--',
+                    label: 'Global Loss Ratio (60-75%)',
+                    value: _stats != null ? '${(((_stats!['global_loss_ratio'] ?? 0) as num) * 100).toStringAsFixed(1)}%' : '--',
+                    icon: Icons.warning_amber_rounded,
+                    color: const Color(0xFFF97316)
+                  ),
+                  _StatCard(
+                    label: 'Global BCR (1.33-1.67x)',
+                    value: _stats != null ? '${((_stats!['global_bcr'] ?? 0) as num).toStringAsFixed(2)}x' : '--',
                     icon: Icons.analytics_rounded, 
                     color: const Color(0xFF8B5CF6)
                   ),
@@ -109,7 +119,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             _StatusRow(label: 'Backend API', online: true),
             _StatusRow(label: 'AI / Fraud Service', online: true),
             _StatusRow(label: 'Firestore', online: true),
-          ],
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

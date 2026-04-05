@@ -13,6 +13,7 @@ class RiskScoreRequest(BaseModel):
     heat_index: float = 0.0
     aqi: float = 0.0
     zone_restriction: bool = False
+    unsafe_signal: bool = False
 
 
 class RiskBreakdown(BaseModel):
@@ -26,6 +27,7 @@ class RiskBreakdown(BaseModel):
 class RiskScoreResponse(BaseModel):
     risk_score: float
     tier: str  # none / tier1 / tier2 / full
+    expected_loss: float
     breakdown: RiskBreakdown
 
 
@@ -57,16 +59,22 @@ class ShiftSlot(BaseModel):
 class PredictIncomeRequest(BaseModel):
     weekly_income_band: int   # rupees/week e.g. 12000
     tier: str                 # none / tier1 / tier2 / full
+    weekly_hours: float = 40.0
     shift_slots: list[ShiftSlot]
     trigger_window_start: str   # ISO datetime string
     trigger_window_end: str     # ISO datetime string
     zone_density_factor: float = 1.0
+    demand_factor: float = 1.0
+    expected_loss: float = 0.0
+    premium_pool: float = 0.0
+    expected_claims: float = 0.0
 
 
 class PredictIncomeResponse(BaseModel):
     eligible_hours: float
-    estimated_income: float
-    payout_amount: float
+    income_loss: float
+    scaled_payout: float
+    coverage_ratio: float
 
 
 # ── Fraud Check ──────────────────────────────────────────────────────────────

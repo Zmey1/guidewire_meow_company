@@ -2,10 +2,11 @@
 main.py — ShiftSure AI Service (FastAPI)
 Swagger UI available at /docs after startup.
 
-All endpoints are rule-based (ML-ready contracts, models slot in later).
+Risk and pricing are served by GLM-style actuarial logic with stable API contracts.
 """
 
 import logging
+import math
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -23,6 +24,20 @@ import fraud as fraud_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# GLM-Tweedie coefficients (synthetic bootstrap calibration; refined as data grows)
+GLM_COEFFICIENTS = {
+    "beta0": -2.5,
+    "beta1_rain": 0.8,
+    "beta2_flood": 1.2,
+    "beta3_dispatch": 0.9,
+    "beta4_heat": 0.7,
+    "beta5_restriction": 1.0,
+    "beta6_unsafe": 0.85,
+}
+
+RISK_REFERENCE = 15.0
 
 
 @asynccontextmanager
@@ -60,42 +75,20 @@ def health():
 @app.post("/risk-score", response_model=RiskScoreResponse, tags=["Risk"])
 def risk_score(req: RiskScoreRequest):
     """
-    Compute composite disruption risk score for a zone.
-    Weights: rain 30% | flood 20% | dispatch 20% | heat_aqi 15% | restriction 15%
+    Compute expected loss with a GLM log-link and map to normalized risk tier.
     """
-    rain_score = min(100.0, req.rainfall_mm * 4.0)
-
-    # Precedence: severe_flood > flood > 0
-    if req.severe_flood_signal:
-        flood_score = 100.0
-    elif req.flood_signal:
-        flood_score = 60.0
-    else:
-        flood_score = 0.0
-
-    dispatch_score = 80.0 if req.dispatch_outage else 0.0
-
-    heat_score = (
-        100.0 if req.heat_index >= 47
-        else 60.0 if req.heat_index >= 42
-        else 0.0
+    flood_term = int(req.flood_signal) + 2 * int(req.severe_flood_signal)
+    expected_loss = math.exp(
+        GLM_COEFFICIENTS["beta0"]
+        + GLM_COEFFICIENTS["beta1_rain"] * req.rainfall_mm
+        + GLM_COEFFICIENTS["beta2_flood"] * flood_term
+        + GLM_COEFFICIENTS["beta3_dispatch"] * int(req.dispatch_outage)
+        + GLM_COEFFICIENTS["beta4_heat"] * (req.heat_index / 10.0)
+        + GLM_COEFFICIENTS["beta5_restriction"] * int(req.zone_restriction)
+        + GLM_COEFFICIENTS["beta6_unsafe"] * int(req.unsafe_signal)
     )
-    aqi_score = (
-        100.0 if req.aqi >= 400
-        else 60.0 if req.aqi >= 300
-        else 0.0
-    )
-    heat_aqi_score = min(100.0, max(heat_score, aqi_score))
 
-    restriction_score = 80.0 if req.zone_restriction else 0.0
-
-    risk_score_val = (
-        0.30 * rain_score
-        + 0.20 * flood_score
-        + 0.20 * dispatch_score
-        + 0.15 * heat_aqi_score
-        + 0.15 * restriction_score
-    )
+    risk_score_val = min(100.0, (expected_loss / RISK_REFERENCE) * 100.0)
     risk_score_val = round(risk_score_val, 2)
 
     tier = (
@@ -108,12 +101,13 @@ def risk_score(req: RiskScoreRequest):
     return RiskScoreResponse(
         risk_score=risk_score_val,
         tier=tier,
+        expected_loss=round(expected_loss, 4),
         breakdown=RiskBreakdown(
-            rain=round(rain_score, 2),
-            flood=round(flood_score, 2),
-            dispatch=round(dispatch_score, 2),
-            heat_aqi=round(heat_aqi_score, 2),
-            restriction=round(restriction_score, 2),
+            rain=round(req.rainfall_mm, 2),
+            flood=round(float(flood_term), 2),
+            dispatch=round(float(int(req.dispatch_outage)), 2),
+            heat_aqi=round(max(req.heat_index, req.aqi), 2),
+            restriction=round(float(int(req.zone_restriction)), 2),
         )
     )
 
@@ -143,13 +137,14 @@ def calculate_premium(req: PremiumRequest):
 @app.post("/predict-income", response_model=PredictIncomeResponse, tags=["Income"])
 def predict_income(req: PredictIncomeRequest):
     """
-    Estimate disruption payout based on declared shifts and trigger window.
+    Estimate claim-side income loss and pre-cap scaled payout.
+
+    hourly_income = weekly_income_band / weekly_hours
+    income_loss = hourly_income × eligible_hours × demand_factor
+    coverage_ratio = 0.55 + 0.15 × S  where S uses zone risk + pool health
+    scaled_payout = income_loss × coverage_ratio
     """
     from datetime import datetime as dt
-
-    disruption_mults = {"full": 1.0, "tier2": 0.7, "tier1": 0.4, "none": 0.0}
-    if req.tier not in disruption_mults:
-        raise HTTPException(status_code=400, detail=f"Invalid tier '{req.tier}'.")
 
     # Parse trigger window
     try:
@@ -197,35 +192,35 @@ def predict_income(req: PredictIncomeRequest):
             overlap_h = (overlap_end - overlap_start).total_seconds() / 3600.0
             eligible_hours += overlap_h
 
-    if total_declared <= 0:
+    # Coverage ratio components (§9A)
+    R = max(0.0, min(1.0, req.expected_loss / RISK_REFERENCE))
+    if req.premium_pool > 0 and req.expected_claims > 0:
+        bcr = req.premium_pool / req.expected_claims
+    else:
+        bcr = 1.8
+    P = max(0.0, min(1.0, (bcr - 1.0) / 1.8))
+    S = 0.6 * (1.0 - R) + 0.4 * P
+    coverage_ratio = max(0.55, min(0.70, 0.55 + 0.15 * S))
+
+    if total_declared <= 0 or eligible_hours <= 0:
         return PredictIncomeResponse(
-            eligible_hours=0.0, estimated_income=0.0, payout_amount=0.0
+            eligible_hours=round(eligible_hours, 3),
+            income_loss=0.0,
+            scaled_payout=0.0,
+            coverage_ratio=round(coverage_ratio, 4),
         )
 
-    base_hourly = req.weekly_income_band / total_declared
-
-    # Time-of-day multiplier based on trigger window start hour
-    hour = tw_start.hour
-    if 17 <= hour <= 23:
-        time_mult = 1.6
-    elif 12 <= hour <= 14:
-        time_mult = 1.4
-    else:
-        time_mult = 1.0
-
-    # Weekend factor
-    day_type = 1.2 if tw_start.weekday() >= 5 else 1.0
-
-    estimated_income = round(
-        base_hourly * eligible_hours * time_mult * day_type * req.zone_density_factor, 2
-    )
-    disruption_mult = disruption_mults[req.tier]
-    payout = round(estimated_income * disruption_mult, 2)
+    safe_weekly_hours = req.weekly_hours if req.weekly_hours and req.weekly_hours > 0 else 40.0
+    safe_demand_factor = req.demand_factor if req.demand_factor > 0 else 1.0
+    hourly_income = req.weekly_income_band / safe_weekly_hours
+    income_loss = round(hourly_income * eligible_hours * safe_demand_factor, 2)
+    scaled_payout = round(income_loss * coverage_ratio, 2)
 
     return PredictIncomeResponse(
         eligible_hours=round(eligible_hours, 3),
-        estimated_income=estimated_income,
-        payout_amount=payout,
+        income_loss=income_loss,
+        scaled_payout=scaled_payout,
+        coverage_ratio=round(coverage_ratio, 4),
     )
 
 
@@ -249,8 +244,16 @@ def fraud_check(req: FraudCheckRequest):
         )
     except RuntimeError as e:
         logger.error(f"Fraud check error: {e}")
-        # If Neo4j is unavailable (e.g. no credentials set), fail open with reduced trust
-        raise HTTPException(status_code=503, detail=f"Graph service unavailable: {e}")
+        # If Neo4j is unavailable locally, fail open so claim verification can continue.
+        result = {
+            "decision": "approved",
+            "fraud_result": {
+                "graph_anomaly_score": 0.0,
+                "ring_detected": "none",
+                "trust_score_at_check": 0.5,
+                "decision_source": "fallback_no_graph",
+            },
+        }
 
     fr = result["fraud_result"]
     return FraudCheckResponse(

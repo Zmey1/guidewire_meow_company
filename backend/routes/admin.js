@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const adminAuth = require('../middleware/adminAuth');
 const { getDb } = require('../config/firebase');
+const { calculateZoneMetrics, setZoneEnrollmentSuspension } = require('../services/zoneService');
 const admin = require('firebase-admin');
 
 // ── GET /api/admin/claims ─────────────────────────────────────────────────
@@ -29,7 +30,7 @@ router.get('/claims', adminAuth, async (req, res) => {
 
     const enriched = claims.map(c => ({
       ...c,
-      worker_name: workerMap[c.worker_id]?.name || 'Unknown',
+      worker_name: (workerMap[c.worker_id] && workerMap[c.worker_id].name) ? workerMap[c.worker_id].name : 'Unknown',
     }));
 
     return res.json({ claims: enriched });
@@ -111,8 +112,11 @@ router.get('/pools', adminAuth, async (req, res) => {
     const snap = await db.collection('pools').orderBy('created_at', 'desc').limit(50).get();
     const pools = snap.docs.map(d => {
       const data = d.data();
-      const bcr = data.total_collected ? (data.total_claimed || 0) / data.total_collected : 0;
-      return { id: d.id, ...data, bcr };
+      const collected = data.total_collected || 0;
+      const claimed = data.total_claimed || 0;
+      const loss_ratio = collected > 0 ? (claimed / collected) : 0;
+      const bcr = claimed > 0 ? (collected / claimed) : 0;
+      return { id: d.id, ...data, bcr, loss_ratio };
     });
     return res.json({ pools });
   } catch (err) {
@@ -135,20 +139,8 @@ router.get('/zones', adminAuth, async (req, res) => {
         .where('status', '==', 'active')
         .get();
 
-      const poolsSnap = await db.collection('pools')
-        .where('zone_id', '==', z.id)
-        .get();
-
-      let totalClaimed = 0;
-      let totalCollected = 0;
-      poolsSnap.forEach(p => {
-        const pd = p.data();
-        totalClaimed += (pd.total_claimed || 0);
-        totalCollected += (pd.total_collected || 0);
-      });
-      const loss_ratio = totalCollected ? totalClaimed / totalCollected : 0;
-
-      return { ...z, active_riders: activeSnap.size, loss_ratio };
+      const metrics = await calculateZoneMetrics(db, z.id);
+      return { ...z, active_riders: activeSnap.size, loss_ratio: metrics.loss_ratio, bcr: metrics.bcr };
     }));
 
     return res.json({ zones: enriched });
@@ -172,6 +164,27 @@ router.patch('/zones/:id/signals', adminAuth, async (req, res) => {
     }
     await db.collection('zones').doc(req.params.id).update(updates);
     return res.json({ success: true, zone_id: req.params.id, updated: updates });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PATCH /api/admin/zones/:id/enrollment ──────────────────────────────────
+
+router.patch('/zones/:id/enrollment', adminAuth, async (req, res) => {
+  try {
+    const { suspended, reason } = req.body;
+    if (typeof suspended !== 'boolean') {
+      return res.status(400).json({ error: 'suspended (boolean) is required' });
+    }
+
+    const db = getDb();
+    await setZoneEnrollmentSuspension(db, req.params.id, suspended, reason, req.uid);
+    return res.json({
+      success: true,
+      zone_id: req.params.id,
+      enrollment_suspended: suspended,
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -208,6 +221,8 @@ router.get('/dashboard', adminAuth, async (req, res) => {
     const totalPayouts = approvedClaimsSnap.docs.reduce((sum, d) => sum + (d.data().payout_amount || 0), 0);
     const totalCollected = poolsSnap.docs.reduce((sum, d) => sum + (d.data().total_collected || 0), 0);
     const totalClaimed = poolsSnap.docs.reduce((sum, d) => sum + (d.data().total_claimed || 0), 0);
+    const globalLossRatio = totalCollected > 0 ? (totalClaimed / totalCollected) : 0;
+    const globalBcr = totalClaimed > 0 ? (totalCollected / totalClaimed) : 0;
 
     return res.json({
       active_pools: poolsSnap.size,
@@ -215,6 +230,8 @@ router.get('/dashboard', adminAuth, async (req, res) => {
       total_payouts_issued: Math.round(totalPayouts),
       total_collected: Math.round(totalCollected),
       city_reserve_level: Math.round(totalCollected - totalClaimed),
+      global_loss_ratio: globalLossRatio,
+      global_bcr: globalBcr,
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -244,7 +261,8 @@ router.post('/simulate-stress', adminAuth, async (req, res) => {
     });
     
     const projectedClaimed = currentClaimed + totalSimulatedPayout;
-    const projectedBCR = currentCollected ? projectedClaimed / currentCollected : 0;
+    const projectedLossRatio = currentCollected > 0 ? (projectedClaimed / currentCollected) : 0;
+    const projectedBCR = projectedClaimed > 0 ? (currentCollected / projectedClaimed) : 0;
     
     const projectedReserveDrop = (currentCollected - currentClaimed) - totalSimulatedPayout;
     
@@ -252,6 +270,7 @@ router.post('/simulate-stress', adminAuth, async (req, res) => {
       simulated_days: days,
       affected_riders: activePoliciesSnap.size,
       total_simulated_payout: totalSimulatedPayout,
+      projected_loss_ratio: projectedLossRatio,
       projected_bcr: projectedBCR,
       projected_reserve_balance: projectedReserveDrop
     });
@@ -267,7 +286,7 @@ router.post('/simulate-stress', adminAuth, async (req, res) => {
 router.post('/trigger', adminAuth, async (req, res) => {
   try {
     const { zone_id, trigger_type, severity } = req.body;
-    const validTriggers = ['heavy_rain', 'flood', 'dispatch_outage', 'zone_restriction', 'extreme_heat'];
+    const validTriggers = ['heavy_rain', 'flood', 'dispatch_outage', 'zone_restriction', 'extreme_heat', 'unsafe_area'];
 
     if (!zone_id) return res.status(400).json({ error: 'zone_id is required' });
     if (!validTriggers.includes(trigger_type)) {
@@ -285,4 +304,3 @@ router.post('/trigger', adminAuth, async (req, res) => {
 });
 
 module.exports = router;
-

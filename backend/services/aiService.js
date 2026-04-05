@@ -4,7 +4,7 @@ const AI_BASE = process.env.AI_SERVICE_URL || 'http://localhost:8001';
 
 async function getRiskScore(payload) {
   const res = await axios.post(`${AI_BASE}/risk-score`, payload, { timeout: 10000 });
-  return res.data; // { risk_score, tier, breakdown }
+  return res.data; // { risk_score, tier, expected_loss, breakdown }
 }
 
 async function calculatePremium(payload) {
@@ -14,7 +14,7 @@ async function calculatePremium(payload) {
 
 async function predictIncome(payload) {
   const res = await axios.post(`${AI_BASE}/predict-income`, payload, { timeout: 10000 });
-  return res.data; // { eligible_hours, estimated_income, payout_amount }
+  return res.data; // { eligible_hours, income_loss, coverage_ratio, scaled_payout }
 }
 
 async function fraudCheck(payload) {

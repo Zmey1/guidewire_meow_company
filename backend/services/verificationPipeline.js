@@ -7,7 +7,13 @@
 const { getDb } = require('../config/firebase');
 const { fetchWeather } = require('./owmService');
 const { getRiskScore, predictIncome, fraudCheck } = require('./aiService');
+const { checkAndSuspendZoneIfNeeded } = require('./zoneService');
 const admin = require('firebase-admin');
+
+function toWholeRupees(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.trunc(numeric) : 0;
+}
 
 /**
  * Main entry point — fire-and-forget from the route handler.
@@ -61,8 +67,9 @@ async function verificationPipeline(claimId, worker, policy, zone, darkStore) {
       heat_index,
       aqi,
       zone_restriction,
+      unsafe_signal,
     };
-    const { risk_score, tier, breakdown } = await getRiskScore(riskPayload);
+    const { risk_score, tier, expected_loss, breakdown } = await getRiskScore(riskPayload);
 
     // Store trigger event
     const triggerEventRef = db.collection('trigger_events').doc();
@@ -123,27 +130,62 @@ async function verificationPipeline(claimId, worker, policy, zone, darkStore) {
     const incomePayload = {
       weekly_income_band: worker.weekly_income_band,
       tier,
+      weekly_hours: worker.weekly_hours || 40,
       shift_slots: policy.shift_slots || [],
       trigger_window_start: windowStart.toISOString(),
       trigger_window_end: windowEnd.toISOString(),
       zone_density_factor: zone.zone_density_factor || 1.0,
+      demand_factor: 1.0,
+      expected_loss: expected_loss || 0,
+      premium_pool: 0,
+      expected_claims: 0,
     };
-    const { eligible_hours, payout_amount } = await predictIncome(incomePayload);
+
+    if (policy.pool_id) {
+      const poolDoc = await db.collection('pools').doc(policy.pool_id).get();
+      if (poolDoc.exists) {
+        const pool = poolDoc.data() || {};
+        incomePayload.premium_pool = pool.total_collected || 0;
+        incomePayload.expected_claims = pool.total_claimed || 0;
+      }
+    }
+    const { eligible_hours, income_loss, scaled_payout, coverage_ratio } = await predictIncome(incomePayload);
+
+    if ((eligible_hours || 0) <= 0 || (scaled_payout || 0) <= 0) {
+      await rejectClaim(claimRef, policy, {
+        rejection_reason: 'No covered shift overlap detected in the current disruption window',
+        fraud_result: null,
+        risk_score,
+        income_loss: income_loss || 0,
+        scaled_payout: scaled_payout || 0,
+        coverage_ratio: coverage_ratio || 0.625,
+        uncovered_loss: income_loss || 0,
+        eligible_hours: eligible_hours || 0,
+        payout_amount: 0,
+        peer_consensus_ratio,
+      });
+      return;
+    }
 
     // ── Step 8: Apply weekly cap ──────────────────────────────────────────────
     const policyRef = db.collection('policies').doc(policy.id);
     const policySnap = await policyRef.get();
     const latestPolicy = policySnap.data();
-    const payoutsUsed = latestPolicy.payouts_issued_this_week || 0;
-    const effectiveCap = latestPolicy.effective_weekly_cap || latestPolicy.weekly_cap || 0;
+    const payoutsUsed = toWholeRupees(latestPolicy.payouts_issued_this_week || 0);
+    const effectiveCap = toWholeRupees(latestPolicy.effective_weekly_cap || latestPolicy.weekly_cap || 0);
     const remaining = effectiveCap - payoutsUsed;
-    const cappedPayout = Math.max(0, Math.min(payout_amount, remaining));
+    const cappedPayout = Math.max(0, Math.min(toWholeRupees(scaled_payout), remaining));
+    const uncoveredLoss = Math.max(0, (income_loss || 0) - cappedPayout);
 
     if (cappedPayout === 0) {
       await rejectClaim(claimRef, policy, {
         rejection_reason: 'Weekly cap reached — no remaining payout allowance',
         fraud_result: null,
         risk_score,
+        income_loss: income_loss || 0,
+        scaled_payout: scaled_payout || 0,
+        coverage_ratio: coverage_ratio || 0.625,
+        uncovered_loss: uncoveredLoss,
         eligible_hours,
         payout_amount: 0,
         peer_consensus_ratio,
@@ -167,6 +209,10 @@ async function verificationPipeline(claimId, worker, policy, zone, darkStore) {
     if (fraudResult.decision === 'approved') {
       await approveClaim(db, claimRef, policyRef, worker, policy, {
         risk_score,
+        income_loss: income_loss || 0,
+        scaled_payout: scaled_payout || 0,
+        coverage_ratio: coverage_ratio || 0.625,
+        uncovered_loss: uncoveredLoss,
         eligible_hours,
         payout_amount: cappedPayout,
         peer_consensus_ratio,
@@ -185,6 +231,10 @@ async function verificationPipeline(claimId, worker, policy, zone, darkStore) {
         rejection_reason: reason,
         fraud_result: fr,
         risk_score,
+        income_loss: income_loss || 0,
+        scaled_payout: scaled_payout || 0,
+        coverage_ratio: coverage_ratio || 0.625,
+        uncovered_loss: uncoveredLoss,
         eligible_hours,
         payout_amount: cappedPayout,
         peer_consensus_ratio,
@@ -210,13 +260,18 @@ async function verificationPipeline(claimId, worker, policy, zone, darkStore) {
 async function approveClaim(db, claimRef, policyRef, worker, policy, data) {
   const now = admin.firestore.FieldValue.serverTimestamp();
   const batch = db.batch();
+  const payoutAmount = toWholeRupees(data.payout_amount);
 
   // Update claim
   batch.update(claimRef, {
     status: 'approved',
     risk_score: data.risk_score,
+    income_loss: data.income_loss || 0,
+    scaled_payout: data.scaled_payout || 0,
+    coverage_ratio: data.coverage_ratio || 0.625,
+    uncovered_loss: data.uncovered_loss || 0,
     eligible_hours: data.eligible_hours,
-    payout_amount: data.payout_amount,
+    payout_amount: payoutAmount,
     peer_consensus_ratio: data.peer_consensus_ratio,
     fraud_result: data.fraud_result,
     trigger_event_id: data.trigger_event_id,
@@ -226,13 +281,13 @@ async function approveClaim(db, claimRef, policyRef, worker, policy, data) {
 
   // Increment payouts_issued_this_week on policy
   batch.update(policyRef, {
-    payouts_issued_this_week: admin.firestore.FieldValue.increment(data.payout_amount),
+    payouts_issued_this_week: admin.firestore.FieldValue.increment(payoutAmount),
   });
 
   // Credit wallet — add to balance
   const walletRef = db.collection('wallets').doc(worker.uid);
   batch.update(walletRef, {
-    balance: admin.firestore.FieldValue.increment(data.payout_amount),
+    balance: admin.firestore.FieldValue.increment(payoutAmount),
   });
 
   await batch.commit();
@@ -241,7 +296,7 @@ async function approveClaim(db, claimRef, policyRef, worker, policy, data) {
   const walletRef2 = db.collection('wallets').doc(worker.uid);
   await walletRef2.collection('transactions').add({
     type: 'payout',
-    amount: data.payout_amount,
+    amount: payoutAmount,
     description: `Claim approved — ${data.trigger_event_id}`,
     claim_id: claimRef.id,
     created_at: admin.firestore.FieldValue.serverTimestamp(),
@@ -251,17 +306,24 @@ async function approveClaim(db, claimRef, policyRef, worker, policy, data) {
   if (policy.pool_id) {
     const poolRef = db.collection('pools').doc(policy.pool_id);
     await poolRef.update({
-      total_claimed: admin.firestore.FieldValue.increment(data.payout_amount),
+      total_claimed: admin.firestore.FieldValue.increment(payoutAmount),
+      surplus: admin.firestore.FieldValue.increment(-payoutAmount),
     });
   }
 
-  console.log(`[Pipeline] Claim ${claimRef.id} APPROVED — ₹${data.payout_amount}`);
+  await checkAndSuspendZoneIfNeeded(db, policy.zone_id);
+
+  console.log(`[Pipeline] Claim ${claimRef.id} APPROVED — ₹${payoutAmount}`);
 }
 
 async function rejectClaim(claimRef, policy, data) {
   await claimRef.update({
     status: 'rejected',
     risk_score: data.risk_score || 0,
+    income_loss: data.income_loss || 0,
+    scaled_payout: data.scaled_payout || 0,
+    coverage_ratio: data.coverage_ratio || 0.625,
+    uncovered_loss: data.uncovered_loss || 0,
     eligible_hours: data.eligible_hours || 0,
     payout_amount: data.payout_amount || 0,
     peer_consensus_ratio: data.peer_consensus_ratio || 0,

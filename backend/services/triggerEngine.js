@@ -17,7 +17,13 @@
 const { getDb } = require('../config/firebase');
 const { fetchWeather } = require('./owmService');
 const { getRiskScore, predictIncome, fraudCheck } = require('./aiService');
+const { checkAndSuspendZoneIfNeeded } = require('./zoneService');
 const admin = require('firebase-admin');
+
+function toWholeRupees(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.trunc(numeric) : 0;
+}
 
 // ── Signal builders for manual triggers ──────────────────────────────────────
 
@@ -25,17 +31,19 @@ function buildSignals(trigger_type, severity = 'medium') {
   const s = severity === 'high' ? 1.5 : severity === 'low' ? 0.5 : 1.0;
   switch (trigger_type) {
     case 'heavy_rain':
-      return { rainfall_mm: Math.round(25 * s), heat_index: 32, aqi: 50, flood_signal: false, severe_flood_signal: false, dispatch_outage: false, zone_restriction: false };
+      return { rainfall_mm: Math.round(25 * s), heat_index: 32, aqi: 50, flood_signal: false, severe_flood_signal: false, dispatch_outage: false, zone_restriction: false, unsafe_signal: false };
     case 'flood':
-      return { rainfall_mm: Math.round(10 * s), heat_index: 30, aqi: 40, flood_signal: s >= 1.0, severe_flood_signal: s > 1.2, dispatch_outage: false, zone_restriction: false };
+      return { rainfall_mm: Math.round(10 * s), heat_index: 30, aqi: 40, flood_signal: s >= 1.0, severe_flood_signal: s > 1.2, dispatch_outage: false, zone_restriction: false, unsafe_signal: false };
     case 'dispatch_outage':
-      return { rainfall_mm: 0, heat_index: 32, aqi: 50, flood_signal: false, severe_flood_signal: false, dispatch_outage: true, zone_restriction: false };
+      return { rainfall_mm: 0, heat_index: 32, aqi: 50, flood_signal: false, severe_flood_signal: false, dispatch_outage: true, zone_restriction: false, unsafe_signal: false };
     case 'zone_restriction':
-      return { rainfall_mm: 0, heat_index: 32, aqi: 50, flood_signal: false, severe_flood_signal: false, dispatch_outage: false, zone_restriction: true };
+      return { rainfall_mm: 0, heat_index: 32, aqi: 50, flood_signal: false, severe_flood_signal: false, dispatch_outage: false, zone_restriction: true, unsafe_signal: false };
     case 'extreme_heat':
-      return { rainfall_mm: 0, heat_index: Math.round(44 * s), aqi: Math.round(310 * s), flood_signal: false, severe_flood_signal: false, dispatch_outage: false, zone_restriction: false };
+      return { rainfall_mm: 0, heat_index: Math.round(44 * s), aqi: Math.round(310 * s), flood_signal: false, severe_flood_signal: false, dispatch_outage: false, zone_restriction: false, unsafe_signal: false };
+    case 'unsafe_area':
+      return { rainfall_mm: 0, heat_index: 32, aqi: 90, flood_signal: false, severe_flood_signal: false, dispatch_outage: false, zone_restriction: false, unsafe_signal: true };
     default:
-      return { rainfall_mm: 0, heat_index: 32, aqi: 50, flood_signal: false, severe_flood_signal: false, dispatch_outage: false, zone_restriction: false };
+      return { rainfall_mm: 0, heat_index: 32, aqi: 50, flood_signal: false, severe_flood_signal: false, dispatch_outage: false, zone_restriction: false, unsafe_signal: false };
   }
 }
 
@@ -44,7 +52,7 @@ function buildSignals(trigger_type, severity = 'medium') {
 async function runPayoutPipeline({ db, zone, signals, trigger_type, source, triggeredBy }) {
   // Step 4: POST AI /risk-score
   const riskPayload = { zone_id: zone.id, ...signals };
-  const { risk_score, tier, breakdown } = await getRiskScore(riskPayload);
+  const { risk_score, tier, expected_loss, breakdown } = await getRiskScore(riskPayload);
 
   // Step 5: Update zone risk score
   await db.collection('zones').doc(zone.id).update({ current_risk_score: risk_score });
@@ -97,18 +105,35 @@ async function runPayoutPipeline({ db, zone, signals, trigger_type, source, trig
     const worker = { uid: policy.worker_id, ...workerDoc.data() };
 
     // Step 7: predict income
-    let eligible_hours = 0, payout_amount = 0;
+    let eligible_hours = 0, income_loss = 0, scaled_payout = 0, coverage_ratio = 0.625;
     try {
+      let premium_pool = 0;
+      let expected_claims = 0;
+      if (policy.pool_id) {
+        const poolDoc = await db.collection('pools').doc(policy.pool_id).get();
+        if (poolDoc.exists) {
+          const pool = poolDoc.data() || {};
+          premium_pool = pool.total_collected || 0;
+          expected_claims = pool.total_claimed || 0;
+        }
+      }
       const incomeRes = await predictIncome({
         weekly_income_band: worker.weekly_income_band || 10000,
         tier,
+        weekly_hours: worker.weekly_hours || 40,
         shift_slots: policy.shift_slots || [],
         trigger_window_start: windowStart.toISOString(),
         trigger_window_end: windowEnd.toISOString(),
         zone_density_factor: zone.zone_density_factor || 1.0,
+        demand_factor: 1.0,
+        expected_loss: expected_loss || 0,
+        premium_pool,
+        expected_claims,
       });
       eligible_hours = incomeRes.eligible_hours;
-      payout_amount = incomeRes.payout_amount;
+      income_loss = incomeRes.income_loss || 0;
+      scaled_payout = incomeRes.scaled_payout || 0;
+      coverage_ratio = incomeRes.coverage_ratio || 0.625;
     } catch (incomeErr) {
       summary.skipped.push({ worker_id: policy.worker_id, reason: `predict-income error: ${incomeErr.message}` });
       continue;
@@ -120,10 +145,11 @@ async function runPayoutPipeline({ db, zone, signals, trigger_type, source, trig
     }
 
     // Step 8: Apply weekly cap
-    const payoutsUsed = policy.payouts_issued_this_week || 0;
-    const effectiveCap = policy.effective_weekly_cap || policy.weekly_cap || 0;
+    const payoutsUsed = toWholeRupees(policy.payouts_issued_this_week || 0);
+    const effectiveCap = toWholeRupees(policy.effective_weekly_cap || policy.weekly_cap || 0);
     const remaining = effectiveCap - payoutsUsed;
-    const cappedPayout = Math.max(0, Math.min(payout_amount, remaining));
+    const cappedPayout = Math.max(0, Math.min(toWholeRupees(scaled_payout), remaining));
+    const uncoveredLoss = Math.max(0, income_loss - cappedPayout);
 
     if (cappedPayout === 0) {
       summary.skipped.push({ worker_id: policy.worker_id, reason: 'Weekly cap reached' });
@@ -172,6 +198,10 @@ async function runPayoutPipeline({ db, zone, signals, trigger_type, source, trig
       trigger_type,
       trigger_event_id: triggerEventId,
       risk_score,
+      income_loss: income_loss,
+      scaled_payout: scaled_payout,
+      coverage_ratio: coverage_ratio,
+      uncovered_loss: uncoveredLoss,
       payout_amount: cappedPayout,
       eligible_hours,
       peer_consensus_ratio: Math.min(1.0, totalActive > 0 ? policiesSnap.size / totalActive : 1),
@@ -226,6 +256,7 @@ async function runPayoutPipeline({ db, zone, signals, trigger_type, source, trig
 
   summary.total_paid = summary.payouts.reduce((s, p) => s + p.payout_amount, 0);
   summary.message = `Pipeline complete — ₹${summary.total_paid} paid to ${summary.payouts.length} riders`;
+  await checkAndSuspendZoneIfNeeded(db, zone.id);
   return summary;
 }
 
@@ -265,6 +296,7 @@ async function runCronCycle() {
         severe_flood_signal: zone.severe_flood_signal || false,
         dispatch_outage: false, // fetched per dark store below
         zone_restriction: zone.zone_restriction || false,
+        unsafe_signal: zone.unsafe_signal || false,
       };
 
       // Check dark store outage for any dark store in this zone

@@ -55,11 +55,20 @@ class _MainShellState extends ConsumerState<MainShell> {
               ]),
             ),
             trailing: Padding(
-              padding: const EdgeInsets.only(bottom: 24),
-              child: TextButton.icon(
-                icon: const Icon(Icons.logout, color: Color(0xFF94A3B8), size: 18),
-                label: Text('Sign out', style: GoogleFonts.inter(color: const Color(0xFF94A3B8))),
-                onPressed: () => AuthService.signOut(),
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              child: SizedBox(
+                width: double.infinity,
+                child: TextButton.icon(
+                  style: TextButton.styleFrom(
+                    alignment: Alignment.centerLeft,
+                    padding: EdgeInsets.zero,
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  icon: const Icon(Icons.logout, color: Color(0xFF94A3B8), size: 18),
+                  label: Text('Sign out', style: GoogleFonts.inter(color: const Color(0xFF94A3B8))),
+                  onPressed: () => AuthService.signOut(),
+                ),
               ),
             ),
             selectedIconTheme: const IconThemeData(color: Color(0xFF6366F1)),

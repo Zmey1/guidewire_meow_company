@@ -34,6 +34,7 @@ router.get('/risk', auth, async (req, res) => {
       severe_flood_signal: zone.severe_flood_signal || false,
       dispatch_outage: darkStore.dispatch_outage || false,
       zone_restriction: zone.zone_restriction || false,
+      unsafe_signal: zone.unsafe_signal || false,
     };
 
     const result = await getRiskScore(payload);

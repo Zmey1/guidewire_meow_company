@@ -34,12 +34,80 @@ class _ZonesScreenState extends State<ZonesScreen> {
   }
 
   Future<void> _toggleZoneSignal(String zoneId, String signal, bool current) async {
-    await ApiService.patch('/admin/zones/$zoneId/signals', {signal: !current});
+    final res = await ApiService.patch('/admin/zones/$zoneId/signals', {signal: !current});
+    if (res['error'] != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res['error'].toString())));
+    }
     _fetchZones();
   }
 
   Future<void> _toggleDarkStoreSignal(String dsId, bool current) async {
-    await ApiService.patch('/admin/darkstores/$dsId/signals', {'dispatch_outage': !current});
+    final res = await ApiService.patch('/admin/darkstores/$dsId/signals', {'dispatch_outage': !current});
+    if (res['error'] != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res['error'].toString())));
+    }
+    _fetchZones();
+  }
+
+  Future<void> _toggleEnrollment(String zoneId, bool currentlySuspended) async {
+    final reasonCtrl = TextEditingController(
+      text: currentlySuspended
+          ? 'Manual re-enable by admin'
+          : 'Manual suspension by admin',
+    );
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        title: Text(
+          currentlySuspended ? 'Re-enable Enrollment' : 'Suspend Enrollment',
+          style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600),
+        ),
+        content: TextField(
+          controller: reasonCtrl,
+          style: GoogleFonts.inter(color: Colors.white),
+          decoration: InputDecoration(
+            labelText: currentlySuspended ? 'Re-enable note' : 'Suspension reason',
+            labelStyle: GoogleFonts.inter(color: const Color(0xFF94A3B8)),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(currentlySuspended ? 'Re-enable' : 'Suspend'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final res = await ApiService.patch('/admin/zones/$zoneId/enrollment', {
+      'suspended': !currentlySuspended,
+      'reason': reasonCtrl.text.trim(),
+    });
+
+    if (res['error'] != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res['error'].toString())));
+      return;
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            currentlySuspended
+                ? 'Enrollment re-enabled for zone'
+                : 'Enrollment suspended for zone',
+          ),
+        ),
+      );
+    }
     _fetchZones();
   }
 
@@ -48,6 +116,13 @@ class _ZonesScreenState extends State<ZonesScreen> {
     if (score >= 60) return const Color(0xFFF97316);
     if (score >= 40) return const Color(0xFFF59E0B);
     return const Color(0xFF10B981);
+  }
+
+  Color _lossRatioColor(num ratio) {
+    if (ratio > 0.85) return const Color(0xFFEF4444);
+    if (ratio > 0.75) return const Color(0xFFF97316);
+    if (ratio < 0.60) return const Color(0xFF10B981);
+    return const Color(0xFFF59E0B);
   }
 
   @override
@@ -81,6 +156,19 @@ class _ZonesScreenState extends State<ZonesScreen> {
   Widget _buildZoneCard(Map<String, dynamic> zone) {
     final risk = (zone['current_risk_score'] as num?) ?? 0;
     final lossRatio = (zone['loss_ratio'] as num?) ?? 0.0;
+    final bcr = (zone['bcr'] as num?) ?? 0.0;
+    final suspended = zone['enrollment_suspended'] == true;
+    final lossColor = _lossRatioColor(lossRatio);
+
+    String lossHint = 'Loss ratio is in a stable range.';
+    if (lossRatio > 0.85) {
+      lossHint = 'Loss ratio crossed 85% threshold. Enrollment should remain suspended.';
+    } else if (lossRatio > 0.75) {
+      lossHint = 'High loss ratio. Monitor closely and consider suspension.';
+    } else if (lossRatio < 0.60) {
+      lossHint = 'Low loss ratio. Pool has healthy surplus.';
+    }
+
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(24),
@@ -93,8 +181,27 @@ class _ZonesScreenState extends State<ZonesScreen> {
         Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(zone['name'] ?? '', style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white)),
-            Text('${zone['city']} · ${zone['active_riders'] ?? 0} active riders · ${lossRatio > 0 ? "LR: ${(lossRatio * 100).toStringAsFixed(1)}%" : "LR: 0%"}', style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 13)),
+            Text(
+              '${zone['city']} · ${zone['active_riders'] ?? 0} active riders · LR ${(lossRatio * 100).toStringAsFixed(1)}% · BCR ${bcr.toStringAsFixed(2)}x',
+              style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 13),
+            ),
           ])),
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: suspended ? const Color(0xFFEF4444).withValues(alpha: 0.15) : const Color(0xFF10B981).withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              suspended ? 'ENROLLMENT SUSPENDED' : 'ENROLLMENT OPEN',
+              style: GoogleFonts.inter(
+                color: suspended ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                fontWeight: FontWeight.w700,
+                fontSize: 11,
+              ),
+            ),
+          ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(color: _riskColor(risk).withValues(alpha: 0.15), borderRadius: BorderRadius.circular(20)),
@@ -102,6 +209,20 @@ class _ZonesScreenState extends State<ZonesScreen> {
           ),
         ]),
         const SizedBox(height: 20),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: lossColor.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: lossColor.withValues(alpha: 0.3)),
+          ),
+          child: Text(
+            'Loss Ratio ${(lossRatio * 100).toStringAsFixed(1)}% · $lossHint',
+            style: GoogleFonts.inter(color: lossColor, fontSize: 12, fontWeight: FontWeight.w500),
+          ),
+        ),
+        const SizedBox(height: 16),
         Text('Signal Toggles', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: const Color(0xFF64748B))),
         const SizedBox(height: 12),
         Wrap(spacing: 12, runSpacing: 8, children: [
@@ -110,6 +231,19 @@ class _ZonesScreenState extends State<ZonesScreen> {
           _SignalChip(label: '⚠️ Unsafe', active: zone['unsafe_signal'] == true, onToggle: () => _toggleZoneSignal(zone['id'], 'unsafe_signal', zone['unsafe_signal'] == true)),
           _SignalChip(label: '🚧 Restriction', active: zone['zone_restriction'] == true, onToggle: () => _toggleZoneSignal(zone['id'], 'zone_restriction', zone['zone_restriction'] == true)),
         ]),
+        const SizedBox(height: 16),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: () => _toggleEnrollment(zone['id'], suspended),
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: suspended ? const Color(0xFF10B981) : const Color(0xFFEF4444)),
+              foregroundColor: suspended ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+            ),
+            icon: Icon(suspended ? Icons.lock_open_rounded : Icons.pause_circle_rounded),
+            label: Text(suspended ? 'Re-enable Enrollment' : 'Suspend Enrollment'),
+          ),
+        ),
       ]),
     );
   }

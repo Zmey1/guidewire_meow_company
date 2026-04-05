@@ -19,6 +19,20 @@ function getWeekBounds() {
   return { week_start: monday, week_end: sunday };
 }
 
+function normalizeWorkerTier(worker) {
+  const rawTier = (worker && worker.worker_tier) || '';
+  if (rawTier === 'partly_active' || rawTier === 'active') return rawTier;
+  if (rawTier === 'low_activity') return 'partly_active';
+  if (rawTier === 'regular') return 'active';
+  if ((worker.active_days_this_week || 0) >= 3) return 'active';
+  return 'partly_active';
+}
+
+function toWholeRupees(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.trunc(numeric) : 0;
+}
+
 // ── GET /api/policies/premium ──────────────────────────────────────────────
 
 router.get('/premium', auth, async (req, res) => {
@@ -43,10 +57,10 @@ router.get('/premium', auth, async (req, res) => {
       const pool = poolSnap.docs[0].data();
       const collected = pool.total_collected || 1;
       const claimed = pool.total_claimed || 0;
-      const bcr = collected > 0 ? (claimed / collected) : 1.0;
-      if (bcr < 0.4) {
+      const lossRatio = collected > 0 ? (claimed / collected) : 1.0;
+      if (lossRatio < 0.4) {
         rebate_percent = 0.40;
-      } else if (bcr < 0.6) {
+      } else if (lossRatio < 0.6) {
         rebate_percent = 0.20;
       }
     }
@@ -62,14 +76,15 @@ router.get('/premium', auth, async (req, res) => {
       pool_surplus_rebate,
     });
 
+    const workerTier = normalizeWorkerTier(worker);
     const weekly_cap = (worker.weekly_income_band || 10000) * 0.2;
-    const effective_weekly_cap = worker.worker_tier === 'low_activity' ? Math.round(weekly_cap * 0.6) : weekly_cap;
+    const effective_weekly_cap = workerTier === 'partly_active' ? Math.round(weekly_cap * 0.6) : weekly_cap;
 
     return res.json({ 
       ...premiumData,
       weekly_cap,
       effective_weekly_cap,
-      worker_tier: worker.worker_tier || 'regular'
+      worker_tier: workerTier
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -95,6 +110,13 @@ router.post('/purchase', auth, async (req, res) => {
       return res.status(400).json({ error: 'Complete 7 deliveries to be eligible for coverage' });
     }
 
+    const zoneDoc = await db.collection('zones').doc(worker.zone_id).get();
+    if (zoneDoc.exists && zoneDoc.data().enrollment_suspended === true) {
+      return res.status(403).json({
+        error: 'Policy purchase is currently suspended for your zone due to high loss ratio. Please try again later.',
+      });
+    }
+
     const { week_start, week_end } = getWeekBounds();
 
     // Block duplicate active policy
@@ -113,7 +135,7 @@ router.post('/purchase', auth, async (req, res) => {
       .where('week_start', '>=', week_start)
       .limit(1).get();
 
-    const effectivePremium = typeof premium_paid === 'number' ? premium_paid : 0;
+    const effectivePremium = toWholeRupees(premium_paid);
     let poolId;
     if (poolQuery.empty) {
       const poolRef = await db.collection('pools').add({
@@ -137,9 +159,10 @@ router.post('/purchase', auth, async (req, res) => {
       poolId = poolQuery.docs[0].id;
     }
 
-    // Weekly cap — low_activity workers ( < 3 days) get 60%
+    // Weekly cap — partly_active workers get 60%
+    const workerTierAtPurchase = normalizeWorkerTier(worker);
     const weekly_cap = (worker.weekly_income_band || 10000) * 0.2;
-    const effective_weekly_cap = worker.worker_tier === 'low_activity'
+    const effective_weekly_cap = workerTierAtPurchase === 'partly_active'
       ? Math.round(weekly_cap * 0.6)
       : weekly_cap;
 
@@ -154,6 +177,7 @@ router.post('/purchase', auth, async (req, res) => {
       status: 'active',
       weekly_cap,
       effective_weekly_cap,
+      worker_tier_at_purchase: workerTierAtPurchase,
       payouts_issued_this_week: 0,
       pool_id: poolId,
       created_at: admin.firestore.FieldValue.serverTimestamp(),
@@ -188,6 +212,7 @@ router.post('/purchase', auth, async (req, res) => {
       week_end,
       weekly_cap,
       effective_weekly_cap,
+      worker_tier_at_purchase: workerTierAtPurchase,
       pool_id: poolId,
     });
   } catch (err) {
