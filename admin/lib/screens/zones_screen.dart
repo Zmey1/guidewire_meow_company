@@ -12,6 +12,7 @@ class ZonesScreen extends StatefulWidget {
 class _ZonesScreenState extends State<ZonesScreen> {
   List<Map<String, dynamic>> _zones = [];
   bool _loading = true;
+  bool _fetching = false;
   Timer? _timer;
 
   @override
@@ -22,29 +23,42 @@ class _ZonesScreenState extends State<ZonesScreen> {
   }
 
   @override
-  void dispose() { _timer?.cancel(); super.dispose(); }
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 
   Future<void> _fetchZones() async {
+    if (_fetching) return;
+    _fetching = true;
     try {
       final data = await ApiService.get('/admin/zones');
-      if (mounted) setState(() { _zones = List<Map<String, dynamic>>.from(data['zones'] ?? []); _loading = false; });
+      if (!mounted) return;
+      if (data['error'] != null) {
+        setState(() => _loading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(data['error'].toString())),
+        );
+        return;
+      }
+      setState(() {
+        _zones = List<Map<String, dynamic>>.from(data['zones'] ?? []);
+        _loading = false;
+      });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
+    } finally {
+      _fetching = false;
     }
   }
 
-  Future<void> _toggleZoneSignal(String zoneId, String signal, bool current) async {
-    final res = await ApiService.patch('/admin/zones/$zoneId/signals', {signal: !current});
+  Future<void> _toggleZoneSignal(
+      String zoneId, String signal, bool current) async {
+    final res = await ApiService.patch(
+        '/admin/zones/$zoneId/signals', {signal: !current});
     if (res['error'] != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res['error'].toString())));
-    }
-    _fetchZones();
-  }
-
-  Future<void> _toggleDarkStoreSignal(String dsId, bool current) async {
-    final res = await ApiService.patch('/admin/darkstores/$dsId/signals', {'dispatch_outage': !current});
-    if (res['error'] != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res['error'].toString())));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(res['error'].toString())));
     }
     _fetchZones();
   }
@@ -62,20 +76,23 @@ class _ZonesScreenState extends State<ZonesScreen> {
         backgroundColor: const Color(0xFF1E293B),
         title: Text(
           currentlySuspended ? 'Re-enable Enrollment' : 'Suspend Enrollment',
-          style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600),
+          style: GoogleFonts.inter(
+              color: Colors.white, fontWeight: FontWeight.w600),
         ),
         content: TextField(
           controller: reasonCtrl,
           style: GoogleFonts.inter(color: Colors.white),
           decoration: InputDecoration(
-            labelText: currentlySuspended ? 'Re-enable note' : 'Suspension reason',
+            labelText:
+                currentlySuspended ? 'Re-enable note' : 'Suspension reason',
             labelStyle: GoogleFonts.inter(color: const Color(0xFF94A3B8)),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white70)),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -93,7 +110,8 @@ class _ZonesScreenState extends State<ZonesScreen> {
     });
 
     if (res['error'] != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res['error'].toString())));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(res['error'].toString())));
       return;
     }
 
@@ -134,10 +152,17 @@ class _ZonesScreenState extends State<ZonesScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Zone Management', style: GoogleFonts.inter(fontSize: 28, fontWeight: FontWeight.w700, color: Colors.white)),
-              Text('Real-time signals & risk scores (auto-refreshes every 30s)', style: GoogleFonts.inter(color: const Color(0xFF94A3B8))),
+              Text('Zone Management',
+                  style: GoogleFonts.inter(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white)),
+              Text('Real-time signals & risk scores (auto-refreshes every 30s)',
+                  style: GoogleFonts.inter(color: const Color(0xFF94A3B8))),
             ]),
-            IconButton(icon: const Icon(Icons.refresh, color: Color(0xFF64748B)), onPressed: _fetchZones),
+            IconButton(
+                icon: const Icon(Icons.refresh, color: Color(0xFF64748B)),
+                onPressed: _fetchZones),
           ]),
           const SizedBox(height: 32),
           if (_loading)
@@ -162,7 +187,8 @@ class _ZonesScreenState extends State<ZonesScreen> {
 
     String lossHint = 'Loss ratio is in a stable range.';
     if (lossRatio > 0.85) {
-      lossHint = 'Loss ratio crossed 85% threshold. Enrollment should remain suspended.';
+      lossHint =
+          'Loss ratio crossed 85% threshold. Enrollment should remain suspended.';
     } else if (lossRatio > 0.75) {
       lossHint = 'High loss ratio. Monitor closely and consider suspension.';
     } else if (lossRatio < 0.60) {
@@ -179,24 +205,36 @@ class _ZonesScreenState extends State<ZonesScreen> {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(zone['name'] ?? '', style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white)),
-            Text(
-              '${zone['city']} · ${zone['active_riders'] ?? 0} active riders · LR ${(lossRatio * 100).toStringAsFixed(1)}% · BCR ${bcr.toStringAsFixed(2)}x',
-              style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 13),
-            ),
-          ])),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text(zone['name'] ?? '',
+                    style: GoogleFonts.inter(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white)),
+                Text(
+                  '${zone['city']} · ${zone['active_riders'] ?? 0} active riders · LR ${(lossRatio * 100).toStringAsFixed(1)}% · BCR ${bcr.toStringAsFixed(2)}x',
+                  style: GoogleFonts.inter(
+                      color: const Color(0xFF94A3B8), fontSize: 13),
+                ),
+              ])),
           Container(
             margin: const EdgeInsets.only(right: 8),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: suspended ? const Color(0xFFEF4444).withValues(alpha: 0.15) : const Color(0xFF10B981).withValues(alpha: 0.15),
+              color: suspended
+                  ? const Color(0xFFEF4444).withValues(alpha: 0.15)
+                  : const Color(0xFF10B981).withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
               suspended ? 'ENROLLMENT SUSPENDED' : 'ENROLLMENT OPEN',
               style: GoogleFonts.inter(
-                color: suspended ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                color: suspended
+                    ? const Color(0xFFEF4444)
+                    : const Color(0xFF10B981),
                 fontWeight: FontWeight.w700,
                 fontSize: 11,
               ),
@@ -204,8 +242,12 @@ class _ZonesScreenState extends State<ZonesScreen> {
           ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(color: _riskColor(risk).withValues(alpha: 0.15), borderRadius: BorderRadius.circular(20)),
-            child: Text('Risk: ${risk.toStringAsFixed(0)}', style: GoogleFonts.inter(color: _riskColor(risk), fontWeight: FontWeight.w600)),
+            decoration: BoxDecoration(
+                color: _riskColor(risk).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(20)),
+            child: Text('Risk: ${risk.toStringAsFixed(0)}',
+                style: GoogleFonts.inter(
+                    color: _riskColor(risk), fontWeight: FontWeight.w600)),
           ),
         ]),
         const SizedBox(height: 20),
@@ -219,17 +261,38 @@ class _ZonesScreenState extends State<ZonesScreen> {
           ),
           child: Text(
             'Loss Ratio ${(lossRatio * 100).toStringAsFixed(1)}% · $lossHint',
-            style: GoogleFonts.inter(color: lossColor, fontSize: 12, fontWeight: FontWeight.w500),
+            style: GoogleFonts.inter(
+                color: lossColor, fontSize: 12, fontWeight: FontWeight.w500),
           ),
         ),
         const SizedBox(height: 16),
-        Text('Signal Toggles', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: const Color(0xFF64748B))),
+        Text('Signal Toggles',
+            style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: const Color(0xFF64748B))),
         const SizedBox(height: 12),
         Wrap(spacing: 12, runSpacing: 8, children: [
-          _SignalChip(label: '🌊 Flood', active: zone['flood_signal'] == true, onToggle: () => _toggleZoneSignal(zone['id'], 'flood_signal', zone['flood_signal'] == true)),
-          _SignalChip(label: '🌊 Severe Flood', active: zone['severe_flood_signal'] == true, onToggle: () => _toggleZoneSignal(zone['id'], 'severe_flood_signal', zone['severe_flood_signal'] == true)),
-          _SignalChip(label: '⚠️ Unsafe', active: zone['unsafe_signal'] == true, onToggle: () => _toggleZoneSignal(zone['id'], 'unsafe_signal', zone['unsafe_signal'] == true)),
-          _SignalChip(label: '🚧 Restriction', active: zone['zone_restriction'] == true, onToggle: () => _toggleZoneSignal(zone['id'], 'zone_restriction', zone['zone_restriction'] == true)),
+          _SignalChip(
+              label: '🌊 Flood',
+              active: zone['flood_signal'] == true,
+              onToggle: () => _toggleZoneSignal(
+                  zone['id'], 'flood_signal', zone['flood_signal'] == true)),
+          _SignalChip(
+              label: '🌊 Severe Flood',
+              active: zone['severe_flood_signal'] == true,
+              onToggle: () => _toggleZoneSignal(zone['id'],
+                  'severe_flood_signal', zone['severe_flood_signal'] == true)),
+          _SignalChip(
+              label: '⚠️ Unsafe',
+              active: zone['unsafe_signal'] == true,
+              onToggle: () => _toggleZoneSignal(
+                  zone['id'], 'unsafe_signal', zone['unsafe_signal'] == true)),
+          _SignalChip(
+              label: '🚧 Restriction',
+              active: zone['zone_restriction'] == true,
+              onToggle: () => _toggleZoneSignal(zone['id'], 'zone_restriction',
+                  zone['zone_restriction'] == true)),
         ]),
         const SizedBox(height: 16),
         Align(
@@ -237,11 +300,18 @@ class _ZonesScreenState extends State<ZonesScreen> {
           child: OutlinedButton.icon(
             onPressed: () => _toggleEnrollment(zone['id'], suspended),
             style: OutlinedButton.styleFrom(
-              side: BorderSide(color: suspended ? const Color(0xFF10B981) : const Color(0xFFEF4444)),
-              foregroundColor: suspended ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+              side: BorderSide(
+                  color: suspended
+                      ? const Color(0xFF10B981)
+                      : const Color(0xFFEF4444)),
+              foregroundColor:
+                  suspended ? const Color(0xFF10B981) : const Color(0xFFEF4444),
             ),
-            icon: Icon(suspended ? Icons.lock_open_rounded : Icons.pause_circle_rounded),
-            label: Text(suspended ? 'Re-enable Enrollment' : 'Suspend Enrollment'),
+            icon: Icon(suspended
+                ? Icons.lock_open_rounded
+                : Icons.pause_circle_rounded),
+            label:
+                Text(suspended ? 'Re-enable Enrollment' : 'Suspend Enrollment'),
           ),
         ),
       ]),
@@ -253,7 +323,8 @@ class _SignalChip extends StatelessWidget {
   final String label;
   final bool active;
   final VoidCallback onToggle;
-  const _SignalChip({required this.label, required this.active, required this.onToggle});
+  const _SignalChip(
+      {required this.label, required this.active, required this.onToggle});
 
   @override
   Widget build(BuildContext context) {
@@ -263,14 +334,31 @@ class _SignalChip extends StatelessWidget {
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: active ? const Color(0xFFEF4444).withValues(alpha: 0.15) : const Color(0xFF0F172A),
+          color: active
+              ? const Color(0xFFEF4444).withValues(alpha: 0.15)
+              : const Color(0xFF0F172A),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: active ? const Color(0xFFEF4444) : const Color(0xFF334155)),
+          border: Border.all(
+              color:
+                  active ? const Color(0xFFEF4444) : const Color(0xFF334155)),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(width: 8, height: 8, decoration: BoxDecoration(color: active ? const Color(0xFFEF4444) : const Color(0xFF475569), shape: BoxShape.circle)),
+          Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                  color: active
+                      ? const Color(0xFFEF4444)
+                      : const Color(0xFF475569),
+                  shape: BoxShape.circle)),
           const SizedBox(width: 8),
-          Text(label, style: GoogleFonts.inter(color: active ? const Color(0xFFEF4444) : const Color(0xFF94A3B8), fontSize: 13, fontWeight: FontWeight.w500)),
+          Text(label,
+              style: GoogleFonts.inter(
+                  color: active
+                      ? const Color(0xFFEF4444)
+                      : const Color(0xFF94A3B8),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500)),
         ]),
       ),
     );

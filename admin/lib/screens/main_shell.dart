@@ -15,17 +15,33 @@ class MainShell extends ConsumerStatefulWidget {
 class _MainShellState extends ConsumerState<MainShell> {
   int _selectedIndex = 0;
 
-  final List<NavigationRailDestination> _destinations = const [
-    NavigationRailDestination(icon: Icon(Icons.dashboard_rounded), label: Text('Dashboard')),
-    NavigationRailDestination(icon: Icon(Icons.map_rounded), label: Text('Zones')),
-    NavigationRailDestination(icon: Icon(Icons.receipt_long_rounded), label: Text('Claims')),
+  final List<_ShellNavItem> _items = const [
+    _ShellNavItem(
+      label: 'Dashboard',
+      icon: Icons.dashboard_rounded,
+    ),
+    _ShellNavItem(
+      label: 'Zones',
+      icon: Icons.map_rounded,
+    ),
+    _ShellNavItem(
+      label: 'Claims',
+      icon: Icons.receipt_long_rounded,
+    ),
   ];
 
-  final List<Widget> _pages = const [
-    DashboardScreen(),
-    ZonesScreen(),
-    ClaimsScreen(),
-  ];
+  Widget _buildSelectedPage() {
+    switch (_selectedIndex) {
+      case 0:
+        return const DashboardScreen();
+      case 1:
+        return const ZonesScreen();
+      case 2:
+        return const ClaimsScreen();
+      default:
+        return const DashboardScreen();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -33,53 +49,136 @@ class _MainShellState extends ConsumerState<MainShell> {
       backgroundColor: const Color(0xFF0F172A),
       body: Row(
         children: [
-          NavigationRail(
-            backgroundColor: const Color(0xFF1E293B),
-            selectedIndex: _selectedIndex,
-            onDestinationSelected: (i) => setState(() => _selectedIndex = i),
-            extended: true,
-            minExtendedWidth: 220,
-            leading: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
-              child: Row(children: [
-                Container(
-                  width: 36, height: 36,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)]),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(Icons.shield_rounded, color: Colors.white, size: 20),
+          Container(
+            width: 240,
+            color: const Color(0xFF1E293B),
+            padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6366F1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(
+                        Icons.shield_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'ShiftSure',
+                      style: GoogleFonts.inter(
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 10),
-                Text('ShiftSure', style: GoogleFonts.inter(fontWeight: FontWeight.w700, color: Colors.white, fontSize: 16)),
-              ]),
-            ),
-            trailing: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-              child: SizedBox(
-                width: double.infinity,
-                child: TextButton.icon(
-                  style: TextButton.styleFrom(
-                    alignment: Alignment.centerLeft,
-                    padding: EdgeInsets.zero,
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                const SizedBox(height: 32),
+                for (var i = 0; i < _items.length; i++) ...[
+                  _SidebarButton(
+                    item: _items[i],
+                    selected: _selectedIndex == i,
+                    onTap: () => setState(() => _selectedIndex = i),
                   ),
-                  icon: const Icon(Icons.logout, color: Color(0xFF94A3B8), size: 18),
-                  label: Text('Sign out', style: GoogleFonts.inter(color: const Color(0xFF94A3B8))),
+                  const SizedBox(height: 8),
+                ],
+                const Spacer(),
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF94A3B8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 14,
+                    ),
+                    minimumSize: const Size(double.infinity, 0),
+                    alignment: Alignment.centerLeft,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  icon: const Icon(Icons.logout, size: 18),
+                  label: Text(
+                    'Sign out',
+                    style: GoogleFonts.inter(fontWeight: FontWeight.w500),
+                  ),
                   onPressed: () => AuthService.signOut(),
                 ),
-              ),
+              ],
             ),
-            selectedIconTheme: const IconThemeData(color: Color(0xFF6366F1)),
-            unselectedIconTheme: const IconThemeData(color: Color(0xFF64748B)),
-            selectedLabelTextStyle: GoogleFonts.inter(color: const Color(0xFF6366F1), fontWeight: FontWeight.w600),
-            unselectedLabelTextStyle: GoogleFonts.inter(color: const Color(0xFF64748B)),
-            destinations: _destinations,
           ),
-          const VerticalDivider(width: 1, thickness: 1, color: Color(0xFF334155)),
-          Expanded(child: _pages[_selectedIndex]),
+          const VerticalDivider(
+              width: 1, thickness: 1, color: Color(0xFF334155)),
+          Expanded(
+            child: KeyedSubtree(
+              key: ValueKey(_selectedIndex),
+              child: _buildSelectedPage(),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _ShellNavItem {
+  const _ShellNavItem({
+    required this.label,
+    required this.icon,
+  });
+
+  final String label;
+  final IconData icon;
+}
+
+class _SidebarButton extends StatelessWidget {
+  const _SidebarButton({
+    required this.item,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _ShellNavItem item;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final foregroundColor =
+        selected ? const Color(0xFF6366F1) : const Color(0xFF94A3B8);
+
+    return Material(
+      color: selected
+          ? const Color(0xFF6366F1).withValues(alpha: 0.12)
+          : Colors.transparent,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          child: Row(
+            children: [
+              Icon(item.icon, color: foregroundColor, size: 20),
+              const SizedBox(width: 12),
+              Text(
+                item.label,
+                style: GoogleFonts.inter(
+                  color: foregroundColor,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

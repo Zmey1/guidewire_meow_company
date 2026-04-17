@@ -19,7 +19,7 @@ class AuthService {
 
   static User? get currentUser => FirebaseAuth.instance.currentUser;
 
-  static Future<String?> getIdToken() async {
-    return await currentUser?.getIdToken();
+  static Future<String?> getIdToken({bool forceRefresh = false}) async {
+    return await currentUser?.getIdToken(forceRefresh);
   }
 }
