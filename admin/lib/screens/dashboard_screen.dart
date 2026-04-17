@@ -10,12 +10,14 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   Map<String, dynamic>? _stats;
+  List<dynamic>? _predictions;
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _fetchStats();
+    _fetchPredictions();
   }
 
   Future<void> _fetchStats() async {
@@ -24,6 +26,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (mounted) setState(() { _stats = data; _loading = false; });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _fetchPredictions() async {
+    try {
+      final data = await ApiService.get('/admin/weekly-predictions');
+      if (mounted) setState(() { _predictions = data; });
+    } catch (e) {
+      print('Failed to fetch predictions: $e');
     }
   }
 
@@ -83,7 +94,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
                   ),
                   const SizedBox(width: 16),
-                  IconButton(icon: const Icon(Icons.refresh, color: Color(0xFF64748B)), onPressed: () { setState(() => _loading = true); _fetchStats(); }),
+                  IconButton(icon: const Icon(Icons.refresh, color: Color(0xFF64748B)), onPressed: () { setState(() => _loading = true); _fetchStats(); _fetchPredictions(); }),
                 ]),
               ],
             ),
@@ -119,6 +130,65 @@ class _DashboardScreenState extends State<DashboardScreen> {
             _StatusRow(label: 'Backend API', online: true),
             _StatusRow(label: 'AI / Fraud Service', online: true),
             _StatusRow(label: 'Firestore', online: true),
+            const SizedBox(height: 40),
+            Text('7-Day Risk Predictions', style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white)),
+            const SizedBox(height: 16),
+            if (_predictions == null)
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF334155)),
+                ),
+                child: const Center(child: CircularProgressIndicator()),
+              )
+            else if (_predictions!.isEmpty)
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF334155)),
+                ),
+                child: Center(child: Text('No predictions available', style: GoogleFonts.inter(color: const Color(0xFF94A3B8)))),
+              )
+            else
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF334155)),
+                ),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: DataTable(
+                    columns: [
+                      DataColumn(label: Text('Date', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600))),
+                      DataColumn(label: Text('Risk Score', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600))),
+                      DataColumn(label: Text('Predicted Claims', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600))),
+                    ],
+                    rows: (_predictions ?? []).map((p) {
+                      final riskScore = (p['risk_score'] ?? 0) as num;
+                      final riskColor = riskScore > 70 ? const Color(0xFFEF4444) : 
+                                       riskScore > 40 ? const Color(0xFFF59E0B) : 
+                                       const Color(0xFF10B981);
+                      return DataRow(cells: [
+                        DataCell(Text(p['date'] ?? '--', style: GoogleFonts.inter(color: Colors.white70))),
+                        DataCell(Row(children: [
+                          Container(
+                            width: 8, height: 8,
+                            decoration: BoxDecoration(color: riskColor, shape: BoxShape.circle),
+                          ),
+                          const SizedBox(width: 8),
+                          Text('${riskScore.toStringAsFixed(1)}%', style: GoogleFonts.inter(color: riskColor, fontWeight: FontWeight.w600)),
+                        ])),
+                        DataCell(Text('${p['predicted_claims'] ?? 0}', style: GoogleFonts.inter(color: Colors.white70))),
+                      ]);
+                    }).toList(),
+                  ),
+                ),
+              ),
                 ],
               ),
             ),
