@@ -1,9 +1,13 @@
 const express = require('express');
 const router = express.Router();
+const axios = require('axios');
 const adminAuth = require('../middleware/adminAuth');
 const { getDb } = require('../config/firebase');
 const { calculateZoneMetrics, setZoneEnrollmentSuspension } = require('../services/zoneService');
 const admin = require('firebase-admin');
+
+const aiService = require("../services/aiService");
+const owmService = require("../services/owmService");
 
 // ── GET /api/admin/claims ─────────────────────────────────────────────────
 
@@ -301,6 +305,68 @@ router.post('/trigger', adminAuth, async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+});
+
+
+router.get("/weekly-predictions", adminAuth, async (req, res) => {
+
+  try {
+
+    // 1️⃣ Fetch weather forecast
+    const weather = await axios.get(
+      "https://api.openweathermap.org/data/2.5/forecast",
+      {
+        params: {
+          lat: 12.97,
+          lon: 77.59,
+          units: "metric",
+          appid: process.env.OWM_API_KEY
+        }
+      }
+    );
+
+    const forecast = weather.data.list.slice(0,7);
+
+    const predictions = [];
+
+    // 2️⃣ Loop through forecast days
+    for (const item of forecast) {
+
+      const rain = item.rain?.["3h"] ?? 0;
+      const temp = item.main.feels_like;
+
+      // 3️⃣ Call AI risk service
+      const risk = await axios.post(
+        `${process.env.AI_SERVICE_URL}/risk-score`,
+        {
+          rainfall_mm: rain,
+          heat_index: temp,
+          aqi: 100
+        }
+      );
+
+      const riskScore = risk.data.risk_score;
+
+      // 4️⃣ Estimate claims
+      const predictedClaims = Math.round((riskScore / 100) * 30);
+
+      predictions.push({
+        date: item.dt_txt,
+        risk_score: riskScore,
+        predicted_claims: predictedClaims
+      });
+
+    }
+
+    res.json(predictions);
+
+  } catch (err) {
+
+    console.error(err);
+    res.status(500).json({ error: "Prediction failed" });
+
+  }
+
 });
 
 module.exports = router;
