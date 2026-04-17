@@ -290,15 +290,19 @@ This replaces the older "must file during the shift" restriction.
 ---
 
 ### 6.6 Wallet Tab
-The wallet is an in-app balance ledger backed by real payment rails.
+The wallet is an in-app balance ledger backed by Firestore transactions.
+
+#### UI and Actions
+- The wallet displays a primary balance and a list of transactions (reverse chronological order).
+- A **"Withdraw"** button is present, which opens an amount input dialog. Upon success, it deducts from the balance directly based on Firestore transactional integrity and provides success notifications.
 
 #### Supported transaction types
-- `premium`
-- `payout`
-- `rebate`
-- `withdrawal`
+- `premium` (policy purchase deduction)
+- `payout` (claim approval credit)
+- `rebate` (pool surplus credit)
+- `withdrawal` (rider cashout deduction, indicated by a negative amount and an up arrow icon in the UI)
 
-Riders can initiate withdrawals from their wallet balance. Real cashout flow is active.
+Riders can initiate withdrawals from their wallet balance. Real cashout flow is active via `POST /api/wallet/withdraw` using atomic sub-transactions within their wallet document.
 
 ---
 
@@ -715,6 +719,9 @@ If rejected:
 ### Step 11: Trigger event association
 Claims are associated with disruption evidence via `trigger_event_id` where applicable.
 
+### Step 12: Post-approval zone auto-suspension check
+After a claim is marked as approved, the system evaluates the current Loss Ratio of the associated zone. If the zone's loss ratio crosses the critical threshold (> 85%), the platform automatically places a suspension block (`enrollment_suspended: true`) to halt further policy underwriting until manually re-enabled by an admin. An audit record of this event is created in the `zone_config` collection.
+
 ---
 
 ## 12A. Two-Phase Mathematical Flow
@@ -846,12 +853,14 @@ Should include:
 - city
 - current risk status
 - active riders
-- loss ratio
-- `enrollment_suspended` status
+- loss ratio (color-coded warnings: Green < 60%, Orange > 75%, Red > 85%)
+- BCR
+- `enrollment_suspended` status (red badge if suspended, green if active)
 - disruption simulation / creation controls
+- one-click re-enable toggle with editable reason field for suspended zones
 
 #### Loss ratio warning and auto-suspension
-If a zone's loss ratio exceeds **85%**, the system **automatically suspends new policy enrollment** for that zone. The suspension state is stored on the zone document (`enrollment_suspended: true`) and mirrored in `zone_config` for admin override and audit. The admin dashboard surfaces the suspension status and provides a manual re-enable control. The policy purchase flow checks `enrollment_suspended` at purchase time and blocks the purchase if true.
+If a zone's loss ratio exceeds **85%**, the system **automatically suspends new policy enrollment** for that zone. The suspension state is stored on the zone document (`enrollment_suspended: true`) and mirrored in `zone_config` for admin override and audit. The admin dashboard surfaces the suspension status alongside the loss ratio and BCR metrics, and provides a manual re-enable control. The policy purchase flow checks `enrollment_suspended` at purchase time and blocks the purchase if true.
 
 ### 15.3 Claims Page
 Should support:
@@ -971,11 +980,12 @@ Fields include:
 Fields include:
 - `worker_id`
 - `balance`
-- `transactions[]` — array of transaction records
+
+Transactions are stored as a sub-collection: `wallets/{worker_id}/transactions/`
 
 Each transaction record includes:
 - `type` — one of `premium`, `payout`, `rebate`, `withdrawal`
-- `amount`
+- `amount` 
 - `reference_id` — claim id (for payouts), policy id (for premiums), or null
 - `created_at`
 

@@ -164,6 +164,7 @@ Two states depending on whether the rider has an active policy.
 2. Premium breakdown auto-fetches from backend (`GET /api/policies/premium?plan={tier}`) which internally calls AI `/calculate-premium`
 3. Rider declares shift slots for the week — day-by-day time pickers (start time + end time per day, optional per day)
 4. "Buy Plan" button → `POST /api/policies/purchase` → creates policy + pool document (upsert) on backend
+   - *Note: If zone enrollment is suspended (loss ratio > 85%), purchase is blocked and an error alert is shown ("Policy purchase is suspended...").*
 5. On success → screen transitions to Active Policy state
 
 ### State B — Active Policy
@@ -345,6 +346,7 @@ Transient confirmation screen. "View My Claims" navigates back to the Claims lis
 │  ┌─────────────────────┐    │
 │  │     ₹{balance}       │    │
 │  │   Available Balance   │    │
+│  │    [ WITHDRAW ]       │    │
 │  └─────────────────────┘    │
 │                             │
 │  TRANSACTIONS               │
@@ -361,18 +363,23 @@ Transient confirmation screen. "View My Claims" navigates back to the Claims lis
 │  − ₹{amt}    Premium       │
 │  {plan} plan purchase       │
 │  {date}                     │
+│                             │
+│  − ₹{amt}    Withdrawal    │
+│  Sent to Bank Account       │
+│  {date}                     │
 └─────────────────────────────┘
 ```
 
 **Details:**
-- Balance displayed prominently at top
-- Transaction list in reverse chronological order
-- Three transaction types with color coding:
+- Balance displayed prominently at top.
+- "Withdraw" button opens an amount input dialog. Upon success, deducts balance and shows a success notification.
+- Transaction list in reverse chronological order. Filtering allowed.
+- Four transaction types with color coding:
   - `payout` — green (+), linked to a claim_id
   - `rebate` — green (+), pool surplus distribution
   - `premium` — red (−), policy purchase deduction
-- Each entry: amount, type label, description, timestamp
-- No withdrawal/cashout for Phase 2 — wallet is mock balance only
+  - `withdrawal` — red (−) with an up arrow icon, recorded when user cashes out.
+- Each entry: amount, type label, description, timestamp.
 
 **Empty state:** "No transactions yet."
 
