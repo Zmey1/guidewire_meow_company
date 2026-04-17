@@ -74,7 +74,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
         'phone': _phoneCtrl.text.trim(),
         'dark_store_id': _selectedDarkStoreId,
       });
-      // No manual navigation needed; main.dart handles it via authStateChanges stream
+      // Navigate to dashboard
+      if (mounted) {
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const MainTabs()),
+          (route) => false,
+        );
+      }
     } on FirebaseAuthException catch (e) {
       setState(() { _error = e.code == 'email-already-in-use' ? 'Phone already registered. Please login.' : e.message; });
     } catch (e) {

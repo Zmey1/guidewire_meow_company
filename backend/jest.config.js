@@ -1,13 +1,14 @@
 /**
- * jest.config.js — Jest multi-project config for test pyramid.
+ * jest.config.js — Jest configuration for test pyramid.
  *
- * Projects: unit → integration → flow
- * Run all:         npm test
- * Run by layer:    npm run test:unit
+ * Run all unit tests:    npm run test:unit
+ * Run e2e tests:         npm run test:e2e
+ * Run everything:        npm test
  */
 
 module.exports = {
   testEnvironment: 'node',
-  testMatch: ['<rootDir>/tests/e2e/**/*.test.js'],
-  testTimeout: 30000,
+  testMatch: ['<rootDir>/tests/**/*.test.js'],
+  testTimeout: 60000,
+  testPathIgnorePatterns: [],
 };
