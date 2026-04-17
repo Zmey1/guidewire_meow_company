@@ -96,3 +96,29 @@ Or trigger GitHub Actions workflow `Seed Demo Data` (requires GCP Workload Ident
 | Firebase Project | `shiftsure-a34e9` |
 | Neo4j AuraDB URI | `neo4j+s://97366ceb.databases.neo4j.io` |
 | GCP Project (unused, no billing) | `shiftsure-a34e9` |
+
+
+---
+
+## REAL APIS
+
+1. **Custom AI Service / Backend API**
+   * **Method:** `POST`
+   * **Endpoint:** `https://shiftsure-ai.onrender.com/fraud-check`
+   * **Example:** `curl -X POST "https://shiftsure-ai.onrender.com/fraud-check" -H "Content-Type: application/json" -d '{"worker_id": "W123", "amount": 100, "location_verified": true}'`
+
+2. **OpenWeatherMap API**
+   * **Method:** `GET`
+   * **Endpoint:** `https://api.openweathermap.org/data/2.5/forecast`
+   * **Example:** `curl -X GET "https://api.openweathermap.org/data/2.5/forecast?lat=12.9&lon=77.5&appid=YOUR_API_KEY"`
+
+3. **Neo4j AuraDB**
+   * **Method:** `BOLT/Cypher`
+   * **Endpoint:** `neo4j+s://97366ceb.databases.neo4j.io`
+
+## MOCK APIS
+
+1. **Payment Gateway**
+   * **Method:** `POST`
+   * **Endpoint:** Internal `backend/services/paymentGateway.js` 
+   * **Example:** A simulated payout call returning a mock ID like `tx_mock_123` instead of hitting Razorpay or Stripe.
