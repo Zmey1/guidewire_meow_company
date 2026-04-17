@@ -105,7 +105,7 @@ Or trigger GitHub Actions workflow `Seed Demo Data` (requires GCP Workload Ident
 1. **Custom AI Service / Backend API**
    * **Method:** `POST`
    * **Endpoint:** `https://shiftsure-ai.onrender.com/fraud-check`
-   * **Example:** `curl -X POST "https://shiftsure-ai.onrender.com/fraud-check" -H "Content-Type: application/json" -d '{"worker_id": "W123", "amount": 100, "location_verified": true}'`
+   * **Example:** `curl -X POST "https://shiftsure-ai.onrender.com/fraud-check" -H "Content-Type: application/json" -d '{"worker_id": "W123", "zone_id": "Z1", "trigger_event_id": "TE1", "claim_id": "C456", "trigger_type": "RAIN", "peer_consensus_ratio": 0.8, "payout_amount": 1500.0, "location_verified": true, "gps_distance_km": 1.2, "weather_validated": true}'`
 
 2. **OpenWeatherMap API**
    * **Method:** `GET`
