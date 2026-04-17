@@ -1,0 +1,19 @@
+.firebase/
+firebase-debug.log
+.codex
+
+mobile/android/key.properties
+mobile/android/*.jks
+mobile/android/*.keystore
+
+*.apk
+*.aab
+
+# Secrets
+ai/Neo4j-*.txt
+backend/serviceAccountKey.json
+ai/.env
+backend/.env
+
+# Claude Code local memory
+.claude/

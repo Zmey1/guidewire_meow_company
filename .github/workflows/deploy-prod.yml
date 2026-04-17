@@ -1,0 +1,182 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'shiftsure-a34e9' }}
+  GCP_REGION: ${{ vars.GCP_REGION || 'asia-south1' }}
+  ARTIFACT_REGISTRY_REPO: ${{ vars.ARTIFACT_REGISTRY_REPO || 'shiftsure' }}
+  CLOUD_RUN_BACKEND_SERVICE: ${{ vars.CLOUD_RUN_BACKEND_SERVICE || 'shiftsure-backend' }}
+  CLOUD_RUN_AI_SERVICE: ${{ vars.CLOUD_RUN_AI_SERVICE || 'shiftsure-ai' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push AI image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          AI_IMAGE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/shiftsure-ai:${IMAGE_TAG}"
+          docker build -t "${AI_IMAGE}" ./ai
+          docker push "${AI_IMAGE}"
+          echo "AI_IMAGE=${AI_IMAGE}" >> "$GITHUB_ENV"
+
+      - name: Deploy AI service
+        id: deploy_ai
+        run: |
+          AI_RUNTIME_SA="shiftsure-ai-runtime@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+          cat <<EOF >/tmp/ai-env.yaml
+          PORT: "8080"
+          NEO4J_URI: "${{ secrets.NEO4J_URI }}"
+          NEO4J_USER: "${{ secrets.NEO4J_USER }}"
+          NEO4J_PASSWORD: "${{ secrets.NEO4J_PASSWORD }}"
+          EOF
+
+          gcloud run deploy "${CLOUD_RUN_AI_SERVICE}" \
+            --image "${AI_IMAGE}" \
+            --region "${GCP_REGION}" \
+            --platform managed \
+            --service-account "${AI_RUNTIME_SA}" \
+            --allow-unauthenticated \
+            --cpu 1 \
+            --memory 512Mi \
+            --min-instances 0 \
+            --max-instances 1 \
+            --cpu-throttling \
+            --env-vars-file /tmp/ai-env.yaml
+
+          AI_URL="$(gcloud run services describe "${CLOUD_RUN_AI_SERVICE}" \
+            --region "${GCP_REGION}" \
+            --format='value(status.url)')"
+
+          echo "ai_url=${AI_URL}" >> "$GITHUB_OUTPUT"
+          echo "AI_URL=${AI_URL}" >> "$GITHUB_ENV"
+
+      - name: Build and push backend image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          BACKEND_IMAGE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/shiftsure-backend:${IMAGE_TAG}"
+          docker build -t "${BACKEND_IMAGE}" ./backend
+          docker push "${BACKEND_IMAGE}"
+          echo "BACKEND_IMAGE=${BACKEND_IMAGE}" >> "$GITHUB_ENV"
+
+      - name: Deploy backend service
+        id: deploy_backend
+        run: |
+          BACKEND_RUNTIME_SA="shiftsure-backend-runtime@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+          CORS_ORIGINS="https://${GCP_PROJECT_ID}.web.app,https://${GCP_PROJECT_ID}.firebaseapp.com,http://localhost:3000"
+
+          cat <<EOF >/tmp/backend-env.yaml
+          PORT: "8080"
+          FIREBASE_PROJECT_ID: "${GCP_PROJECT_ID}"
+          AI_SERVICE_URL: "${AI_URL}"
+          OWM_API_KEY: "${{ secrets.OWM_API_KEY }}"
+          CORS_ALLOWED_ORIGINS: "${CORS_ORIGINS}"
+          EOF
+
+          gcloud run deploy "${CLOUD_RUN_BACKEND_SERVICE}" \
+            --image "${BACKEND_IMAGE}" \
+            --region "${GCP_REGION}" \
+            --platform managed \
+            --service-account "${BACKEND_RUNTIME_SA}" \
+            --allow-unauthenticated \
+            --cpu 1 \
+            --memory 512Mi \
+            --min-instances 0 \
+            --max-instances 1 \
+            --cpu-throttling \
+            --env-vars-file /tmp/backend-env.yaml
+
+          BACKEND_URL="$(gcloud run services describe "${CLOUD_RUN_BACKEND_SERVICE}" \
+            --region "${GCP_REGION}" \
+            --format='value(status.url)')"
+
+          echo "backend_url=${BACKEND_URL}" >> "$GITHUB_OUTPUT"
+          echo "BACKEND_URL=${BACKEND_URL}" >> "$GITHUB_ENV"
+
+      - name: Build admin web app
+        run: |
+          cd admin
+          flutter pub get
+          flutter build web --release --dart-define=API_BASE_URL="${BACKEND_URL}/api"
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Deploy Firebase Hosting and Firestore config
+        run: firebase deploy --project "${GCP_PROJECT_ID}" --only hosting,firestore:rules,firestore:indexes --non-interactive
+
+      - name: Run post-deploy health checks
+        run: |
+          curl --fail --silent --show-error "${AI_URL}/health" >/tmp/ai-health.json
+          curl --fail --silent --show-error "${BACKEND_URL}/health" >/tmp/backend-health.json
+          printf 'AI URL: %s\n' "${AI_URL}" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Backend URL: %s\n' "${BACKEND_URL}" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Admin URL: %s\n' "https://${GCP_PROJECT_ID}.web.app" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Trim old Artifact Registry images
+        shell: bash
+        run: |
+          trim_images() {
+            local image_path="$1"
+            mapfile -t versions < <(
+              gcloud artifacts docker images list "${image_path}" \
+                --sort-by='~UPDATE_TIME' \
+                --format='get(VERSION)'
+            )
+
+            if [ "${#versions[@]}" -le 2 ]; then
+              echo "No cleanup needed for ${image_path}"
+              return
+            fi
+
+            for version in "${versions[@]:2}"; do
+              if [ -n "${version}" ]; then
+                gcloud artifacts docker images delete "${image_path}@${version}" --quiet --delete-tags || true
+              fi
+            done
+          }
+
+          trim_images "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/shiftsure-ai"
+          trim_images "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/shiftsure-backend"

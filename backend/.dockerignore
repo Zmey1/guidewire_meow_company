@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log
+.env
+.env.*
+coverage
+.DS_Store
+serviceAccountKey.json
+test-results.txt
+e2e_output.txt
+seed_out.txt

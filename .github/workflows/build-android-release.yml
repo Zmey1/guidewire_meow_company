@@ -1,0 +1,64 @@
+name: Build Android Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: Production backend API URL ending with /api
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Validate API base URL
+        run: |
+          case "${{ inputs.api_base_url }}" in
+            https://*/api) ;;
+            *)
+              echo "api_base_url must be a full https URL ending with /api"
+              exit 1
+              ;;
+          esac
+
+      - name: Restore Android signing files
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > mobile/android/upload-keystore.jks
+          cat <<'EOF' > mobile/android/key.properties
+          storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=upload-keystore.jks
+          EOF
+
+      - name: Build signed APK
+        run: |
+          cd mobile
+          flutter pub get
+          flutter build apk --release --dart-define=API_BASE_URL="${{ inputs.api_base_url }}"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiftsure-android-apk-${{ github.sha }}
+          path: mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error

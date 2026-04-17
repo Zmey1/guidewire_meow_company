@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ShiftSure clients read and write data through the backend API.
+    // The backend uses the Admin SDK, which bypasses Firestore rules.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
