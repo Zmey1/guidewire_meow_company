@@ -8,7 +8,13 @@
  *   - Replaces existing seeded rider history on every run
  *   - Current-week active policy for demo rider with deterministic manual-claim coverage
  *
- * Run: GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json node scripts/seed.js
+ * Run: GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json \
+ *        SEED_ADMIN_PASSWORD=... SEED_DEMO_PASSWORD=... SEED_RIDER_PASSWORD=... \
+ *        node scripts/seed.js
+ *
+ * Passwords are never hardcoded. Each must be >= 12 characters. Existing
+ * seeded accounts have their password RESET to these values on every run,
+ * which is how previously published demo passwords get rotated.
  */
 
 const AUTH_DOMAIN = 'shiftsure.in';
@@ -24,6 +30,19 @@ admin.initializeApp({
 
 const db = admin.firestore();
 const auth = admin.auth();
+
+function requirePassword(name) {
+  const value = process.env[name] || '';
+  if (value.length < 12) {
+    console.error(`❌ ${name} must be set to a password of at least 12 characters.`);
+    process.exit(1);
+  }
+  return value;
+}
+
+const ADMIN_PASSWORD = requirePassword('SEED_ADMIN_PASSWORD');
+const DEMO_PASSWORD = requirePassword('SEED_DEMO_PASSWORD');
+const RIDER_PASSWORD = requirePassword('SEED_RIDER_PASSWORD');
 
 // ── Utils ────────────────────────────────────────────────────────────────────
 
@@ -142,14 +161,14 @@ const darkStores = [
 // ── Workers ──────────────────────────────────────────────────────────────────
 
 const workerDefs = [
-  { password: 'Demo@1234', name: 'Demo Rider', phone: '9000000001', dark_store_id: DEMO_DARK_STORE_ID, zone_id: DEMO_ZONE_ID, weekly_income_band: 12000, weekly_hours: 46, active_days_this_week: 5, total_deliveries: 104, isDemo: true },
-  { password: 'Rider@123', name: 'Raj Kumar', phone: '9876543210', dark_store_id: 'ds_koramangala', zone_id: 'zone_koramangala', weekly_income_band: 12000, weekly_hours: 45, active_days_this_week: 5, total_deliveries: 120 },
-  { password: 'Rider@123', name: 'Priya Suresh', phone: '9876543211', dark_store_id: 'ds_koramangala', zone_id: 'zone_koramangala', weekly_income_band: 9000, weekly_hours: 28, active_days_this_week: 2, total_deliveries: 34 },
-  { password: 'Rider@123', name: 'Arjun Verma', phone: '9876543212', dark_store_id: 'ds_indiranagar', zone_id: 'zone_indiranagar', weekly_income_band: 15000, weekly_hours: 50, active_days_this_week: 6, total_deliveries: 210 },
-  { password: 'Rider@123', name: 'Meena Rao', phone: '9876543213', dark_store_id: 'ds_indiranagar', zone_id: 'zone_indiranagar', weekly_income_band: 6000, weekly_hours: 24, active_days_this_week: 1, total_deliveries: 3 }, // < 7 deliveries — ineligible demo
-  { password: 'Rider@123', name: 'Deepa Nair', phone: '9876543215', dark_store_id: 'ds_whitefield', zone_id: 'zone_whitefield', weekly_income_band: 12000, weekly_hours: 42, active_days_this_week: 4, total_deliveries: 88 },
-  { password: 'Rider@123', name: 'Suresh T', phone: '9876543216', dark_store_id: 'ds_electronic_city', zone_id: 'zone_electronic_city', weekly_income_band: 6000, weekly_hours: 30, active_days_this_week: 2, total_deliveries: 12 },
-  { password: 'Rider@123', name: 'Kiran M', phone: '9876543214', dark_store_id: 'ds_hsr', zone_id: 'zone_hsr', weekly_income_band: 9000, weekly_hours: 27, active_days_this_week: 2, total_deliveries: 5 }, // < 7 deliveries
+  { password: DEMO_PASSWORD, name: 'Demo Rider', phone: '9000000001', dark_store_id: DEMO_DARK_STORE_ID, zone_id: DEMO_ZONE_ID, weekly_income_band: 12000, weekly_hours: 46, active_days_this_week: 5, total_deliveries: 104, isDemo: true },
+  { password: RIDER_PASSWORD, name: 'Raj Kumar', phone: '9876543210', dark_store_id: 'ds_koramangala', zone_id: 'zone_koramangala', weekly_income_band: 12000, weekly_hours: 45, active_days_this_week: 5, total_deliveries: 120 },
+  { password: RIDER_PASSWORD, name: 'Priya Suresh', phone: '9876543211', dark_store_id: 'ds_koramangala', zone_id: 'zone_koramangala', weekly_income_band: 9000, weekly_hours: 28, active_days_this_week: 2, total_deliveries: 34 },
+  { password: RIDER_PASSWORD, name: 'Arjun Verma', phone: '9876543212', dark_store_id: 'ds_indiranagar', zone_id: 'zone_indiranagar', weekly_income_band: 15000, weekly_hours: 50, active_days_this_week: 6, total_deliveries: 210 },
+  { password: RIDER_PASSWORD, name: 'Meena Rao', phone: '9876543213', dark_store_id: 'ds_indiranagar', zone_id: 'zone_indiranagar', weekly_income_band: 6000, weekly_hours: 24, active_days_this_week: 1, total_deliveries: 3 }, // < 7 deliveries — ineligible demo
+  { password: RIDER_PASSWORD, name: 'Deepa Nair', phone: '9876543215', dark_store_id: 'ds_whitefield', zone_id: 'zone_whitefield', weekly_income_band: 12000, weekly_hours: 42, active_days_this_week: 4, total_deliveries: 88 },
+  { password: RIDER_PASSWORD, name: 'Suresh T', phone: '9876543216', dark_store_id: 'ds_electronic_city', zone_id: 'zone_electronic_city', weekly_income_band: 6000, weekly_hours: 30, active_days_this_week: 2, total_deliveries: 12 },
+  { password: RIDER_PASSWORD, name: 'Kiran M', phone: '9876543214', dark_store_id: 'ds_hsr', zone_id: 'zone_hsr', weekly_income_band: 9000, weekly_hours: 27, active_days_this_week: 2, total_deliveries: 5 }, // < 7 deliveries
 ];
 
 // ── Historical event definitions ─────────────────────────────────────────────
@@ -204,7 +223,8 @@ async function seed() {
     try {
       const existing = await auth.getUserByEmail(authEmail);
       uid = existing.uid;
-      console.log(`  ⏭  Worker exists: ${w.name} (${authEmail})`);
+      await auth.updateUser(uid, { password: w.password });
+      console.log(`  ⏭  Worker exists (password reset): ${w.name} (${authEmail})`);
     } catch {
       const created = await auth.createUser({
         email: authEmail,
@@ -246,9 +266,10 @@ async function seed() {
   try {
     const existing = await auth.getUserByEmail('admin@shiftsure.in');
     adminUid = existing.uid;
-    console.log('  ⏭  Admin exists');
+    await auth.updateUser(adminUid, { password: ADMIN_PASSWORD });
+    console.log('  ⏭  Admin exists (password reset)');
   } catch {
-    const created = await auth.createUser({ email: 'admin@shiftsure.in', password: 'Admin@123', displayName: 'ShiftSure Admin' });
+    const created = await auth.createUser({ email: 'admin@shiftsure.in', password: ADMIN_PASSWORD, displayName: 'ShiftSure Admin' });
     adminUid = created.uid;
     console.log(`  ✅ Admin created (${adminUid})`);
   }
@@ -626,11 +647,10 @@ async function seed() {
 
   // ── Summary ────────────────────────────────────────────────────────────────
   console.log('\n🎉 Seed complete!\n');
-  console.log(`  Demo rider : 9000000001 / Demo@1234  (auth email: ${authEmailFromPhone('9000000001')})`);
-  console.log('  Admin      : admin@shiftsure.in / Admin@123');
-  console.log(`  Raj Kumar  : 9876543210 / Rider@123  (auth email: ${authEmailFromPhone('9876543210')})`);
-  console.log(`  Arjun Verma: 9876543212 / Rider@123  (auth email: ${authEmailFromPhone('9876543212')})`);
-  console.log(`  Meena Rao  : 9876543213 / Rider@123  (auth email: ${authEmailFromPhone('9876543213')})`);
+  console.log('  Passwords come from SEED_*_PASSWORD env vars (not printed).');
+  console.log(`  Demo rider : 9000000001  (auth email: ${authEmailFromPhone('9000000001')}) — SEED_DEMO_PASSWORD`);
+  console.log('  Admin      : admin@shiftsure.in — SEED_ADMIN_PASSWORD');
+  console.log(`  Riders     : e.g. 9876543210 (auth email: ${authEmailFromPhone('9876543210')}) — SEED_RIDER_PASSWORD`);
 
   console.log('\n  Seeded:');
   console.log(`    Zones         : ${zones.length}`);

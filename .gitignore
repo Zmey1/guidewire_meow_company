@@ -9,11 +9,22 @@ mobile/android/*.keystore
 *.apk
 *.aab
 
-# Secrets
+# Secrets — never commit credentials
 ai/Neo4j-*.txt
-backend/serviceAccountKey.json
+**/serviceAccountKey*.json
+**/*-service-account*.json
 ai/.env
 backend/.env
+*.jks
+*.keystore
+key.properties
+
+# Local tool logs (may contain auth URLs/tokens)
+firepit-log.txt
+firebase-debug.log
 
 # Claude Code local memory
 .claude/
+
+# Gradle output inside the Flutter android folders
+**/android/build/

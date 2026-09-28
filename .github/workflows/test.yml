@@ -5,6 +5,16 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      run_live_e2e:
+        description: Run the LIVE E2E suite (writes to the real Firebase project)
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 jobs:
   # 1. Detect changes to run tests selectively
@@ -34,6 +44,37 @@ jobs:
               - 'admin/**'
               - '.github/workflows/test.yml'
 
+  # 2. Backend unit tests (hermetic: in-memory Firestore, no network)
+  test-backend:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Run unit tests
+        run: |
+          cd backend
+          npm ci
+          npm test
+
+  # 3. AI service tests (no Neo4j required)
+  test-ai:
+    needs: changes
+    if: ${{ needs.changes.outputs.ai == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Run pytest
+        run: |
+          cd ai
+          pip install -r requirements.txt pytest
+          pytest -q
 
   # 4. Mobile Flutter Tests
   test-mobile:
@@ -69,11 +110,12 @@ jobs:
           cd admin
           flutter test
 
-  # 6. True E2E Pipeline (Live Tests)
-  test-e2e:
-    needs: changes
-    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.ai == 'true' }}
+  # 6. LIVE E2E pipeline — manual only. It writes to the real Firebase project,
+  # so it never runs on push/PR.
+  test-e2e-live:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_e2e }}
     runs-on: ubuntu-latest
+    environment: e2e
     steps:
       - uses: actions/checkout@v4
       - name: Setup Node.js
@@ -85,34 +127,30 @@ jobs:
       - name: Install dependencies
         run: |
           cd ai && pip install -r requirements.txt
-          cd ../backend && npm install
-      - name: Create Firebase credentials file
+          cd ../backend && npm ci
+      - name: Create Firebase credentials file (outside the workspace)
+        env:
+          SA_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
         run: |
-          cat <<'EOF' > backend/serviceAccountKey.json
-          ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
-          EOF
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/backend/serviceAccountKey.json" >> $GITHUB_ENV
+          printf '%s' "$SA_JSON" > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
 
       - name: Run E2E Flow
         env:
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-          NEO4J_INSTANCE: ${{ secrets.NEO4J_INSTANCE }}
           NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
           NEO4J_URI: ${{ secrets.NEO4J_URI }}
           NEO4J_USER: ${{ secrets.NEO4J_USER }}
           OWM_API_KEY: ${{ secrets.OWM_API_KEY }}
-          PORT: ${{ secrets.PORT }}
+          PAYOUT_MODE: simulated
         run: |
-          # Spin up AI Service
           cd ai
           uvicorn main:app --port 8001 &
-          
-          # Spin up Backend
           cd ../backend
-          node server.js &
-          
-          # Wait for boot
+          AI_SERVICE_URL=http://localhost:8001 node server.js &
           sleep 10
-          
-          # Run the pipeline E2E test suite
-          npm test
+          npm run test:e2e
+
+      - name: Remove credentials file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sa.json"

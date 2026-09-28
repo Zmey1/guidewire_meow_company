@@ -8,6 +8,7 @@ const { getDb } = require('../config/firebase');
 const { fetchWeather } = require('./owmService');
 const { getRiskScore, predictIncome, fraudCheck } = require('./aiService');
 const { checkAndSuspendZoneIfNeeded } = require('./zoneService');
+const { creditClaimPayout } = require('./payoutService');
 const admin = require('firebase-admin');
 
 function toWholeRupees(value) {
@@ -167,9 +168,8 @@ async function verificationPipeline(claimId, worker, policy, zone, darkStore) {
       return;
     }
 
-    // ── Step 8: Apply weekly cap ──────────────────────────────────────────────
-    const policyRef = db.collection('policies').doc(policy.id);
-    const policySnap = await policyRef.get();
+    // ── Step 8: Apply weekly cap (re-checked atomically at credit time) ──────
+    const policySnap = await db.collection('policies').doc(policy.id).get();
     const latestPolicy = policySnap.data();
     const payoutsUsed = toWholeRupees(latestPolicy.payouts_issued_this_week || 0);
     const effectiveCap = toWholeRupees(latestPolicy.effective_weekly_cap || latestPolicy.weekly_cap || 0);
@@ -203,11 +203,35 @@ async function verificationPipeline(claimId, worker, policy, zone, darkStore) {
       peer_consensus_ratio,
       payout_amount: cappedPayout,
     };
-    const fraudResult = await fraudCheck(fraudPayload);
+    const reviewData = {
+      risk_score,
+      income_loss: income_loss || 0,
+      scaled_payout: scaled_payout || 0,
+      coverage_ratio: coverage_ratio || 0.625,
+      uncovered_loss: uncoveredLoss,
+      eligible_hours,
+      payout_amount: cappedPayout,
+      peer_consensus_ratio,
+      trigger_event_id: triggerEventId,
+    };
+
+    let fraudResult;
+    try {
+      fraudResult = await fraudCheck(fraudPayload);
+    } catch (fraudErr) {
+      // Never approve or reject without a fraud verdict — hold for an admin.
+      await markForReview(claimRef, `Fraud check unavailable: ${fraudErr.message}`, reviewData);
+      return;
+    }
 
     // ── Step 10 / 11: Decision ────────────────────────────────────────────────
-    if (fraudResult.decision === 'approved') {
-      await approveClaim(db, claimRef, policyRef, worker, policy, {
+    if (fraudResult.decision === 'pending_review') {
+      await markForReview(claimRef, 'Fraud graph unavailable — held for manual review', {
+        ...reviewData,
+        fraud_result: fraudResult.fraud_result,
+      });
+    } else if (fraudResult.decision === 'approved') {
+      await approveClaim(db, claimRef, worker, policy, {
         risk_score,
         income_loss: income_loss || 0,
         scaled_payout: scaled_payout || 0,
@@ -247,73 +271,71 @@ async function verificationPipeline(claimId, worker, policy, zone, darkStore) {
     if (err.message.includes('requires an index')) {
       console.error(`[Pipeline] ACTION REQUIRED: Create index for claims collection group. See link in logs if available or use Firebase Console.`);
     }
-    await claimRef.update({
-      status: 'rejected',
-      rejection_reason: 'Verification error — please contact support',
-      resolved_at: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    // Infrastructure failures (AI/weather/Firestore) must not auto-reject or
+    // auto-approve a rider's claim — park it for an admin, unless already resolved.
+    try {
+      const current = (await claimRef.get()).data() || {};
+      if (current.status === 'pending_verification') {
+        await markForReview(claimRef, `Automatic verification failed: ${err.message}`);
+      }
+    } catch (markErr) {
+      console.error(`[Pipeline] Could not mark claim ${claimId} for review:`, markErr.message);
+    }
   }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-async function approveClaim(db, claimRef, policyRef, worker, policy, data) {
-  const now = admin.firestore.FieldValue.serverTimestamp();
-  const batch = db.batch();
-  const payoutAmount = toWholeRupees(data.payout_amount);
-
-  // Update claim
-  batch.update(claimRef, {
-    status: 'approved',
-    risk_score: data.risk_score,
-    income_loss: data.income_loss || 0,
-    scaled_payout: data.scaled_payout || 0,
-    coverage_ratio: data.coverage_ratio || 0.625,
-    uncovered_loss: data.uncovered_loss || 0,
-    eligible_hours: data.eligible_hours,
-    payout_amount: payoutAmount,
-    peer_consensus_ratio: data.peer_consensus_ratio,
-    fraud_result: data.fraud_result,
-    trigger_event_id: data.trigger_event_id,
-    rejection_reason: null,
-    resolved_at: now,
-  });
-
-  // Increment payouts_issued_this_week on policy
-  batch.update(policyRef, {
-    payouts_issued_this_week: admin.firestore.FieldValue.increment(payoutAmount),
-  });
-
-  // Credit wallet — add to balance
-  const walletRef = db.collection('wallets').doc(worker.uid);
-  batch.update(walletRef, {
-    balance: admin.firestore.FieldValue.increment(payoutAmount),
-  });
-
-  await batch.commit();
-
-  // Add transaction to sub-collection
-  const walletRef2 = db.collection('wallets').doc(worker.uid);
-  await walletRef2.collection('transactions').add({
-    type: 'payout',
-    amount: payoutAmount,
+async function approveClaim(db, claimRef, worker, policy, data) {
+  const result = await creditClaimPayout(db, {
+    claimRef,
+    workerId: worker.uid,
+    policyId: policy.id,
+    poolId: policy.pool_id,
+    payoutAmount: data.payout_amount,
+    allowedStatuses: ['pending_verification'],
     description: `Claim approved — ${data.trigger_event_id}`,
-    claim_id: claimRef.id,
-    created_at: admin.firestore.FieldValue.serverTimestamp(),
+    claimFields: (amount) => ({
+      risk_score: data.risk_score,
+      income_loss: data.income_loss || 0,
+      scaled_payout: data.scaled_payout || 0,
+      coverage_ratio: data.coverage_ratio || 0.625,
+      uncovered_loss: Math.max(0, (data.income_loss || 0) - amount),
+      eligible_hours: data.eligible_hours,
+      peer_consensus_ratio: data.peer_consensus_ratio,
+      fraud_result: data.fraud_result,
+      trigger_event_id: data.trigger_event_id,
+    }),
   });
 
-  // Update pool (read policy for pool_id)
-  if (policy.pool_id) {
-    const poolRef = db.collection('pools').doc(policy.pool_id);
-    await poolRef.update({
-      total_claimed: admin.firestore.FieldValue.increment(payoutAmount),
-      surplus: admin.firestore.FieldValue.increment(-payoutAmount),
-    });
+  if (!result.credited) {
+    if (result.reason === 'cap_reached') {
+      await rejectClaim(claimRef, policy, {
+        ...data,
+        rejection_reason: 'Weekly cap reached — no remaining payout allowance',
+        uncovered_loss: data.income_loss || 0,
+        payout_amount: 0,
+      });
+    } else {
+      console.warn(`[Pipeline] Claim ${claimRef.id} not credited (${result.reason})`);
+    }
+    return;
   }
 
   await checkAndSuspendZoneIfNeeded(db, policy.zone_id);
 
-  console.log(`[Pipeline] Claim ${claimRef.id} APPROVED — ₹${payoutAmount}`);
+  console.log(`[Pipeline] Claim ${claimRef.id} APPROVED — ₹${result.amount}`);
+}
+
+async function markForReview(claimRef, reviewReason, data = {}) {
+  await claimRef.update({
+    ...data,
+    status: 'pending_review',
+    review_reason: reviewReason,
+    rejection_reason: null,
+    resolved_at: null,
+  });
+  console.warn(`[Pipeline] Claim ${claimRef.id} PENDING REVIEW — ${reviewReason}`);
 }
 
 async function rejectClaim(claimRef, policy, data) {

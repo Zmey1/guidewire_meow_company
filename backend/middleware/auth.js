@@ -14,6 +14,7 @@ async function authMiddleware(req, res, next) {
   try {
     const decoded = await getAuth().verifyIdToken(token);
     req.uid = decoded.uid;
+    req.userEmail = decoded.email || null;
 
     // Fetch role from Firestore worker doc
     const db = getDb();

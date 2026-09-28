@@ -4,6 +4,9 @@ const adminAuth = require('../middleware/adminAuth');
 const { getDb } = require('../config/firebase');
 const { calculateZoneMetrics, setZoneEnrollmentSuspension } = require('../services/zoneService');
 const admin = require('firebase-admin');
+const { creditClaimPayout } = require('../services/payoutService');
+
+const OVERRIDABLE_STATUSES = ['rejected', 'pending_review'];
 
 // ── GET /api/admin/claims ─────────────────────────────────────────────────
 
@@ -52,53 +55,48 @@ router.post('/claims/:id/override', adminAuth, async (req, res) => {
     if (!claimDoc.exists) return res.status(404).json({ error: 'Claim not found' });
 
     const claim = claimDoc.data();
-    if (claim.status !== 'rejected') {
-      return res.status(400).json({ error: 'Can only override rejected claims' });
+    if (!OVERRIDABLE_STATUSES.includes(claim.status)) {
+      return res.status(400).json({ error: 'Can only override rejected or pending_review claims' });
     }
 
-    const payout = claim.payout_amount || 0;
-    const workerId = claim.worker_id;
-
-    const batch = db.batch();
-
-    // Flip claim status
-    batch.update(claimRef, {
-      status: 'approved',
-      rejection_reason: null,
-      resolved_at: admin.firestore.FieldValue.serverTimestamp(),
-      override_reason: reason,
-      override_by: req.uid,
+    // Status is re-checked inside the transaction, so a double-click or two
+    // admins overriding at once cannot credit the claim twice.
+    const result = await creditClaimPayout(db, {
+      claimRef,
+      workerId: claim.worker_id,
+      policyId: claim.policy_id,
+      poolId: null,
+      payoutAmount: claim.payout_amount || 0,
+      allowedStatuses: OVERRIDABLE_STATUSES,
+      enforceCap: false,
+      description: `Admin override — ${reason}`,
+      txFields: { override_by: req.uid },
+      claimFields: {
+        override_reason: reason,
+        override_by: req.uid,
+        review_reason: null,
+      },
     });
 
-    // Credit wallet
-    const walletRef = db.collection('wallets').doc(workerId);
-    batch.update(walletRef, {
-      balance: admin.firestore.FieldValue.increment(payout),
-    });
+    if (!result.credited && result.reason !== 'cap_reached') {
+      return res.status(409).json({ error: `Claim already resolved (${result.reason})` });
+    }
 
-    await batch.commit();
-
-    // Wallet transaction
-    await db.collection('wallets').doc(workerId)
-      .collection('transactions').add({
-        type: 'payout',
-        amount: payout,
-        description: `Admin override — ${reason}`,
-        claim_id: req.params.id,
-        created_at: admin.firestore.FieldValue.serverTimestamp(),
+    if (!result.credited) {
+      // Zero-amount claim (rejected before a payout was computed): approve with no credit.
+      await claimRef.update({
+        status: 'approved',
+        rejection_reason: null,
+        review_reason: null,
+        resolved_at: admin.firestore.FieldValue.serverTimestamp(),
+        override_reason: reason,
+        override_by: req.uid,
       });
+    }
 
-    // Nudge trust+0.1 via AI service if available
-    try {
-      const { getAuth } = require('../config/firebase');
-      const workerDoc = await db.collection('workers').doc(workerId).get();
-      // Trust update happens inside Neo4j — fire-and-forget via AI service
-      // (AI service exposes no separate trust endpoint; handled by fraud-check internally)
-      // Log the override for audit
-      console.log(`[Admin Override] Claim ${req.params.id} overridden by ${req.uid}: ${reason}`);
-    } catch (_) {}
+    console.log(`[Admin Override] Claim ${req.params.id} overridden by ${req.uid}: ${reason}`);
 
-    return res.json({ success: true, claim_id: req.params.id, payout_credited: payout });
+    return res.json({ success: true, claim_id: req.params.id, payout_credited: result.amount });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

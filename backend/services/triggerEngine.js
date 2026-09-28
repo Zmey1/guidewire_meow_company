@@ -18,6 +18,7 @@ const { getDb } = require('../config/firebase');
 const { fetchWeather } = require('./owmService');
 const { getRiskScore, predictIncome, fraudCheck } = require('./aiService');
 const { checkAndSuspendZoneIfNeeded } = require('./zoneService');
+const { creditClaimPayout } = require('./payoutService');
 const admin = require('firebase-admin');
 
 function toWholeRupees(value) {
@@ -156,9 +157,10 @@ async function runPayoutPipeline({ db, zone, signals, trigger_type, source, trig
       continue;
     }
 
-    // Step 9: Fraud check (fail-open if unavailable)
-    let fraudDecision = 'approved';
-    let fraudResult = { graph_anomaly_score: 0, ring_detected: 'none', trust_score_at_check: 1.0, decision_source: 'matrix' };
+    // Step 9: Fraud check — never approve without a verdict
+    let fraudDecision = 'pending_review';
+    let fraudResult = null;
+    let reviewReason = 'Fraud graph unavailable — held for manual review';
     try {
       const peerConsensusRatio = Math.min(1.0, policiesSnap.size / Math.max(totalActive, 1));
       const fr = await fraudCheck({
@@ -173,24 +175,18 @@ async function runPayoutPipeline({ db, zone, signals, trigger_type, source, trig
       fraudDecision = fr.decision;
       fraudResult = fr.fraud_result;
     } catch (fraudErr) {
-      console.warn(`[TriggerEngine] Fraud check unavailable — failing open for ${policy.worker_id}: ${fraudErr.message}`);
-      // Fail-open: approve but with 50% payout reduction as safety
-      fraudDecision = 'approved';
+      console.warn(`[TriggerEngine] Fraud check unavailable for ${policy.worker_id} — holding for review: ${fraudErr.message}`);
+      reviewReason = `Fraud check unavailable: ${fraudErr.message}`;
     }
 
-    if (fraudDecision !== 'approved') {
+    if (fraudDecision === 'rejected') {
       summary.skipped.push({ worker_id: policy.worker_id, reason: 'Fraud check rejected' });
       continue;
     }
 
-    // Step 10: Write claim + credit wallet atomically
-    const claimRef = db.collection('claims').doc();
-    const walletRef = db.collection('wallets').doc(policy.worker_id);
-    const policyRef = db.collection('policies').doc(policy.id);
-
-    const batch = db.batch();
-
-    batch.set(claimRef, {
+    // Deterministic id: re-running the same trigger event cannot double-pay a worker.
+    const claimRef = db.collection('claims').doc(`auto_${triggerEventId}_${policy.worker_id}`);
+    const baseClaim = {
       worker_id: policy.worker_id,
       policy_id: policy.id,
       zone_id: zone.id,
@@ -201,57 +197,56 @@ async function runPayoutPipeline({ db, zone, signals, trigger_type, source, trig
       income_loss: income_loss,
       scaled_payout: scaled_payout,
       coverage_ratio: coverage_ratio,
-      uncovered_loss: uncoveredLoss,
-      payout_amount: cappedPayout,
       eligible_hours,
       peer_consensus_ratio: Math.min(1.0, totalActive > 0 ? policiesSnap.size / totalActive : 1),
-      status: 'approved',
       fraud_result: fraudResult,
-      rejection_reason: null,
       source,
       created_at: admin.firestore.FieldValue.serverTimestamp(),
-      resolved_at: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    };
 
-    batch.update(policyRef, {
-      payouts_issued_this_week: admin.firestore.FieldValue.increment(cappedPayout),
-    });
-
-    batch.update(walletRef, {
-      balance: admin.firestore.FieldValue.increment(cappedPayout),
-      updated_at: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    // Update pool
-    if (policy.pool_id) {
-      const poolRef = db.collection('pools').doc(policy.pool_id);
-      batch.update(poolRef, {
-        total_claimed: admin.firestore.FieldValue.increment(cappedPayout),
-        surplus: admin.firestore.FieldValue.increment(-cappedPayout),
-      });
+    if (fraudDecision !== 'approved') {
+      await claimRef.set({
+        ...baseClaim,
+        uncovered_loss: uncoveredLoss,
+        payout_amount: cappedPayout,
+        status: 'pending_review',
+        review_reason: reviewReason,
+        rejection_reason: null,
+        resolved_at: null,
+      }, { merge: true });
+      summary.skipped.push({ worker_id: policy.worker_id, claim_id: claimRef.id, reason: 'Held for manual review (fraud check unavailable)' });
+      continue;
     }
 
-    await batch.commit();
-
-    // Wallet transaction sub-doc
-    await walletRef.collection('transactions').add({
-      type: 'payout',
-      amount: cappedPayout,
+    // Step 10: Write claim + credit wallet in one idempotent transaction
+    const result = await creditClaimPayout(db, {
+      claimRef,
+      workerId: policy.worker_id,
+      policyId: policy.id,
+      poolId: policy.pool_id,
+      payoutAmount: cappedPayout,
       description: `Auto payout — ${trigger_type.replace(/_/g, ' ')} (${tier})`,
-      claim_id: claimRef.id,
-      trigger_event_id: triggerEventId,
-      created_at: admin.firestore.FieldValue.serverTimestamp(),
+      txFields: { trigger_event_id: triggerEventId },
+      claimFields: (amount) => ({
+        ...baseClaim,
+        uncovered_loss: Math.max(0, income_loss - amount),
+      }),
     });
+
+    if (!result.credited) {
+      summary.skipped.push({ worker_id: policy.worker_id, reason: result.reason === 'cap_reached' ? 'Weekly cap reached' : 'Already paid' });
+      continue;
+    }
 
     summary.payouts.push({
       worker_id: policy.worker_id,
       worker_name: worker.name,
       claim_id: claimRef.id,
-      payout_amount: cappedPayout,
+      payout_amount: result.amount,
       eligible_hours,
     });
 
-    console.log(`[TriggerEngine] Payout ₹${cappedPayout} → ${worker.name} (${policy.worker_id})`);
+    console.log(`[TriggerEngine] Payout ₹${result.amount} → ${worker.name} (${policy.worker_id})`);
   }
 
   summary.total_paid = summary.payouts.reduce((s, p) => s + p.payout_amount, 0);

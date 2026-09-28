@@ -46,6 +46,7 @@ router.post('/register', auth, async (req, res) => {
     batch.set(workerRef, {
       name,
       phone,
+      email: req.userEmail || `${String(phone).trim()}@shiftsure.in`,
       dark_store_id,
       zone_id,
       active_days_this_week: 0,

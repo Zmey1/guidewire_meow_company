@@ -11,7 +11,7 @@ class LoginScreen extends ConsumerStatefulWidget {
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _emailCtrl = TextEditingController(text: 'admin@shiftsure.in');
-  final _passCtrl = TextEditingController(text: 'Admin@123');
+  final _passCtrl = TextEditingController();
   bool _loading = false;
   String? _error;
 

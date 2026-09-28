@@ -33,7 +33,7 @@ node scripts/seed.js
 curl -s -X POST \
   "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=AIzaSyCecB3jX0I6vyvin0yW1TI76UfvpvgKCHI" \
   -H "Content-Type: application/json" \
-  -d '{"email":"demo.rider@shiftsure.in","password":"Demo@1234","returnSecureToken":true}' \
+  -d '{"email":"demo.rider@shiftsure.in","password":"<SEED_PASSWORD>","returnSecureToken":true}' \
   | grep -o '"idToken":"[^"]*"'
 ```
 Copy the `idToken` value → set as `TOKEN`.
@@ -43,7 +43,7 @@ Copy the `idToken` value → set as `TOKEN`.
 curl -s -X POST \
   "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=AIzaSyCecB3jX0I6vyvin0yW1TI76UfvpvgKCHI" \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@shiftsure.in","password":"Admin@123","returnSecureToken":true}' \
+  -d '{"email":"admin@shiftsure.in","password":"<SEED_PASSWORD>","returnSecureToken":true}' \
   | grep -o '"idToken":"[^"]*"'
 ```
 
@@ -264,7 +264,7 @@ curl -s -X PATCH "http://localhost:3000/api/admin/zones/zone_koramangala/signals
 
 ## 12. Test from Mobile App (Flutter)
 
-1. **Launch app** → login with `demo.rider@shiftsure.in` / `Demo@1234`
+1. **Launch app** → login with `demo.rider@shiftsure.in` / `<password from SEED_*_PASSWORD>`
 2. **Home screen** should show:
    - "Hi, Demo 👋" with dark store name
    - Active policy card: Standard plan, ₹1000 cap, ₹340 used
@@ -279,7 +279,7 @@ curl -s -X PATCH "http://localhost:3000/api/admin/zones/zone_koramangala/signals
 
 ## 13. Test from Admin Web App (Flutter Web)
 
-1. **Open admin web app** → login with `admin@shiftsure.in` / `Admin@123`
+1. **Open admin web app** → login with `admin@shiftsure.in` / `<password from SEED_*_PASSWORD>`
 2. **Dashboard** → shows: 5 active pools, riders insured, total payouts, reserve level
 3. **Zones page** → 5 zones with risk scores, "Simulate Disruption" button
 4. **Click "Simulate Disruption"** on Koramangala → select `heavy_rain` + `high` → see payout summary
@@ -306,7 +306,7 @@ After the 3rd call (once `payouts_issued_this_week >= weekly_cap`), the worker s
 
 ```bash
 # Login as Meena Rao (only 3 deliveries)
-# Get token for meena.r@shiftsure.in / Rider@123
+# Get token for meena.r@shiftsure.in / <SEED_RIDER_PASSWORD>
 curl -s -X POST "http://localhost:3000/api/policies/purchase" \
   -H "Authorization: Bearer $MEENA_TOKEN" \
   -H "Content-Type: application/json" \
@@ -320,11 +320,11 @@ curl -s -X POST "http://localhost:3000/api/policies/purchase" \
 
 | Account | Email | Password | Role |
 |---|---|---|---|
-| Demo Rider | demo.rider@shiftsure.in | Demo@1234 | rider |
-| Admin | admin@shiftsure.in | Admin@123 | admin |
-| Raj Kumar | raj.kumar@shiftsure.in | Rider@123 | rider |
-| Arjun Verma | arjun.v@shiftsure.in | Rider@123 | rider |
-| Meena Rao (ineligible) | meena.r@shiftsure.in | Rider@123 | rider |
+| Demo Rider | demo.rider@shiftsure.in | <SEED_*_PASSWORD> | rider |
+| Admin | admin@shiftsure.in | <SEED_*_PASSWORD> | admin |
+| Raj Kumar | raj.kumar@shiftsure.in | <SEED_*_PASSWORD> | rider |
+| Arjun Verma | arjun.v@shiftsure.in | <SEED_*_PASSWORD> | rider |
+| Meena Rao (ineligible) | meena.r@shiftsure.in | <SEED_*_PASSWORD> | rider |
 
 ## Firebase API Key (for token fetch)
 ```

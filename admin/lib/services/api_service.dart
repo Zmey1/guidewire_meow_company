@@ -11,7 +11,7 @@ class ApiService {
   );
 
   static Future<Map<String, String>> _headers() async {
-    final token = await AuthService.getIdToken(forceRefresh: true);
+    final token = await AuthService.getIdToken();
     if (token == null || token.isEmpty) {
       throw ApiException('Not signed in', 401);
     }

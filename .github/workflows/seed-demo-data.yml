@@ -18,13 +18,25 @@ jobs:
     environment: production
     steps:
       - name: Validate confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
         run: |
-          if [ "${{ inputs.confirmation }}" != "SEED_PRODUCTION_DEMO_DATA" ]; then
+          if [ "$CONFIRMATION" != "SEED_PRODUCTION_DEMO_DATA" ]; then
             echo "Confirmation text did not match."
             exit 1
           fi
 
       - uses: actions/checkout@v4
+
+      - name: Verify target project matches .firebaserc
+        env:
+          TARGET: ${{ vars.GCP_PROJECT_ID || 'shiftsure-a34e9' }}
+        run: |
+          EXPECTED="$(python3 -c 'import json; print(json.load(open(".firebaserc"))["projects"]["default"])')"
+          if [ "$TARGET" != "$EXPECTED" ]; then
+            echo "Target project $TARGET does not match .firebaserc default $EXPECTED; refusing to seed."
+            exit 1
+          fi
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -47,6 +59,9 @@ jobs:
       - name: Run production seed
         env:
           FIREBASE_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'shiftsure-a34e9' }}
+          SEED_ADMIN_PASSWORD: ${{ secrets.SEED_ADMIN_PASSWORD }}
+          SEED_DEMO_PASSWORD: ${{ secrets.SEED_DEMO_PASSWORD }}
+          SEED_RIDER_PASSWORD: ${{ secrets.SEED_RIDER_PASSWORD }}
         run: |
           cd backend
           npm run seed

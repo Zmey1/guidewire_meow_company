@@ -19,7 +19,7 @@ class ApiService {
 
     try {
       if (Platform.isAndroid)
-        return 'http://192.168.1.28:3000/api'; // Android Emulator
+        return 'http://10.0.2.2:3000/api'; // Android Emulator
       return 'http://localhost:3000/api'; // iOS Simulator or Web
     } catch (_) {
       return 'http://localhost:3000/api'; // Fallback
