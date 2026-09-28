@@ -5,6 +5,8 @@ const { getDb } = require('../config/firebase');
 const { verificationPipeline } = require('../services/verificationPipeline');
 const admin = require('firebase-admin');
 
+const DUPLICATE_WINDOW_MS = 30 * 60 * 1000;
+
 // ── GET /api/claims — rider's claim history ────────────────────────────────
 
 router.get('/', auth, async (req, res) => {
@@ -102,22 +104,6 @@ router.post('/file', auth, async (req, res) => {
       return res.status(403).json({ error: 'Filing window expired — claims must be filed within 48 hours of your shift' });
     }
 
-    // ── Guard 3: duplicate (same trigger_type within 30 min) ──────────────────
-    const thirtyMinAgo = new Date(now.getTime() - 30 * 60 * 1000);
-    const dupSnap = await db.collection('claims')
-      .where('worker_id', '==', req.uid)
-      .where('trigger_type', '==', trigger_type)
-      .where('created_at', '>=', thirtyMinAgo)
-      .limit(1).get();
-
-    if (!dupSnap.empty) {
-      const existingClaim = dupSnap.docs[0].data();
-      const filedAt = existingClaim.created_at?.toDate?.()?.toLocaleTimeString('en-IN') || 'recently';
-      return res.status(429).json({
-        error: `You already filed a ${trigger_type} claim at ${filedAt}`,
-      });
-    }
-
     // ── Fetch zone + dark store ──────────────────────────────────────────────
     const [zoneDoc, darkStoreDoc] = await Promise.all([
       db.collection('zones').doc(worker.zone_id).get(),
@@ -127,39 +113,73 @@ router.post('/file', auth, async (req, res) => {
     const zone = { id: zoneDoc.id, ...zoneDoc.data() };
     const darkStore = { id: darkStoreDoc.id, ...darkStoreDoc.data() };
 
-    // ── Create claim (pending) ────────────────────────────────────────────────
-    const claimRef = await db.collection('claims').add({
-      worker_id: req.uid,
-      policy_id: policy.id,
-      zone_id: worker.zone_id,
-      dark_store_id: worker.dark_store_id,
-      trigger_type,
-      trigger_event_id: null,
-      risk_score: null,
-      income_loss: null,
-      scaled_payout: null,
-      coverage_ratio: null,
-      uncovered_loss: null,
-      payout_amount: null,
-      eligible_hours: null,
-      peer_consensus_ratio: null,
-      status: 'pending_verification',
-      fraud_result: null,
-      rejection_reason: null,
-      created_at: admin.firestore.FieldValue.serverTimestamp(),
-      resolved_at: null,
+    // ── Guard 3 + create claim, atomically ──────────────────────────────────
+    // A per-(worker, trigger) lock doc is read and written in the same
+    // transaction that creates the claim, so double-taps and concurrent
+    // retries cannot create two claims for the same disruption.
+    const claimRef = db.collection('claims').doc();
+    const lockRef = db.collection('claim_locks').doc(`${req.uid}_${trigger_type}`);
+    const nowMs = now.getTime();
+
+    await db.runTransaction(async (tx) => {
+      const lockDoc = await tx.get(lockRef);
+      const lock = lockDoc.exists ? (lockDoc.data() || {}) : null;
+      if (lock && nowMs - Number(lock.filed_at_ms || 0) < DUPLICATE_WINDOW_MS) {
+        const filedAt = new Date(Number(lock.filed_at_ms)).toLocaleTimeString('en-IN');
+        const err = new Error(`You already filed a ${trigger_type} claim at ${filedAt}`);
+        err.code = 'DUPLICATE_CLAIM';
+        err.claimId = lock.claim_id;
+        throw err;
+      }
+
+      tx.set(lockRef, { worker_id: req.uid, trigger_type, claim_id: claimRef.id, filed_at_ms: nowMs });
+      tx.create(claimRef, {
+        worker_id: req.uid,
+        policy_id: policy.id,
+        zone_id: worker.zone_id,
+        dark_store_id: worker.dark_store_id,
+        trigger_type,
+        trigger_event_id: null,
+        risk_score: null,
+        income_loss: null,
+        scaled_payout: null,
+        coverage_ratio: null,
+        uncovered_loss: null,
+        payout_amount: null,
+        eligible_hours: null,
+        peer_consensus_ratio: null,
+        status: 'pending_verification',
+        fraud_result: null,
+        rejection_reason: null,
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+        resolved_at: null,
+      });
     });
 
-    // ── Fire async verification (do NOT await) ─────────────────────────────
-    verificationPipeline(claimRef.id, { uid: req.uid, ...worker }, policy, zone, darkStore)
+    // ── Run verification inside the request ─────────────────────────────────
+    // Cloud Run only guarantees CPU while a request is in flight; work started
+    // after the response is sent can be throttled or dropped when the instance
+    // scales down. The pipeline takes a few seconds and never throws (failures
+    // park the claim in pending_review), so we await it and return the result.
+    await verificationPipeline(claimRef.id, { uid: req.uid, ...worker }, policy, zone, darkStore)
       .catch(err => console.error('[Claims] Pipeline uncaught error:', err.message));
 
-    return res.status(202).json({
+    const resolved = (await claimRef.get()).data() || {};
+
+    return res.status(200).json({
       claim_id: claimRef.id,
-      status: 'pending_verification',
-      message: 'Claim filed. Verification in progress.',
+      status: resolved.status || 'pending_verification',
+      payout_amount: resolved.payout_amount ?? null,
+      rejection_reason: resolved.rejection_reason ?? null,
+      review_reason: resolved.review_reason ?? null,
+      message: resolved.status === 'pending_review'
+        ? 'Claim filed. It is being held for manual review.'
+        : 'Claim filed and verified.',
     });
   } catch (err) {
+    if (err.code === 'DUPLICATE_CLAIM') {
+      return res.status(429).json({ error: err.message, claim_id: err.claimId });
+    }
     console.error('[Claims] POST /file error:', err.message);
     if (err.message.includes('requires an index')) {
       return res.status(500).json({ 

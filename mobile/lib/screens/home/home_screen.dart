@@ -293,7 +293,7 @@ class _ClaimItem extends StatelessWidget {
           Text(claim['trigger_type']?.toString().replaceAll('_', ' ').toUpperCase() ?? '', style: GoogleFonts.inter(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
           Text(status, style: GoogleFonts.inter(color: color, fontSize: 12)),
         ])),
-        Text(claim['payout_amount'] != null && status != 'pending_verification' ? '₹${_formatRupees(claim['payout_amount'])}' : '...', style: GoogleFonts.inter(color: AppTheme.success, fontWeight: FontWeight.w600)),
+        Text(claim['payout_amount'] != null && status != 'pending_verification' && status != 'pending_review' ? '₹${_formatRupees(claim['payout_amount'])}' : '...', style: GoogleFonts.inter(color: AppTheme.success, fontWeight: FontWeight.w600)),
       ]),
     );
   }

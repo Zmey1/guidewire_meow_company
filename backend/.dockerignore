@@ -4,7 +4,11 @@ npm-debug.log
 .env.*
 coverage
 .DS_Store
-serviceAccountKey.json
+# credentials must never be baked into the image — Cloud Run uses its attached service account
+serviceAccountKey*.json
+*-service-account*.json
+tests
+scripts
 test-results.txt
 e2e_output.txt
 seed_out.txt

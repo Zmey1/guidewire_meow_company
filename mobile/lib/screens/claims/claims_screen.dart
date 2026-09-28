@@ -97,7 +97,7 @@ class _ClaimCard extends StatelessWidget {
           Icon(Icons.flash_on_rounded, color: AppTheme.secondary, size: 20),
           const SizedBox(width: 8),
           Expanded(child: Text(trigger, style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 16))),
-          if (payout != null && status != 'pending_verification') Text('₹${_formatRupees(payout)}', style: GoogleFonts.inter(color: AppTheme.success, fontWeight: FontWeight.w700, fontSize: 18)),
+          if (payout != null && status != 'pending_verification' && status != 'pending_review') Text('₹${_formatRupees(payout)}', style: GoogleFonts.inter(color: AppTheme.success, fontWeight: FontWeight.w700, fontSize: 18)),
         ]),
         if (status == 'rejected' && claim['rejection_reason'] != null) ...[
           const SizedBox(height: 12),
@@ -105,6 +105,14 @@ class _ClaimCard extends StatelessWidget {
             width: double.infinity, padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(color: AppTheme.error.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
             child: Text(claim['rejection_reason'], style: GoogleFonts.inter(color: const Color(0xFFFCA5A5), fontSize: 12)),
+          ),
+        ],
+        if (status == 'pending_review') ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity, padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: AppTheme.warning.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
+            child: Text('Under manual review — no payout until an admin approves it.', style: GoogleFonts.inter(color: AppTheme.warning, fontSize: 12)),
           ),
         ]
       ]),

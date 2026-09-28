@@ -7,7 +7,9 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "seed": "node scripts/seed.js",
-    "test": "jest --runInBand --forceExit"
+    "test": "jest --runInBand",
+    "test:e2e": "jest -c jest.e2e.config.js --runInBand --forceExit",
+    "rotate-demo-passwords": "node scripts/rotateDemoPasswords.js"
   },
   "dependencies": {
     "axios": "^1.6.8",

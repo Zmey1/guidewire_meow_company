@@ -8,3 +8,6 @@ venv
 .env
 .env.*
 tests
+# credentials must never be baked into the image
+Neo4j-*.txt
+test_conn.py

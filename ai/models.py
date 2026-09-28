@@ -97,5 +97,5 @@ class FraudResult(BaseModel):
 
 
 class FraudCheckResponse(BaseModel):
-    decision: str                # approved / rejected
+    decision: str                # approved / rejected / pending_review
     fraud_result: FraudResult

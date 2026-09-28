@@ -7,8 +7,26 @@ const { initFirebase } = require('./config/firebase');
 initFirebase();
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+
+// CORS only matters for the browser admin dashboard (the Android app sends no
+// Origin). CORS_ALLOWED_ORIGINS is a comma-separated allowlist; when it is
+// unset, local dev allows any origin and production allows none.
+const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction && allowedOrigins.length === 0) {
+  console.warn('[CORS] CORS_ALLOWED_ORIGINS is empty — browser clients will be blocked');
+}
+app.use(cors({
+  origin: allowedOrigins.length > 0 ? allowedOrigins : !isProduction,
+}));
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    req.rawBody = buf.toString();
+  },
+}));
 
 // Routes
 app.use('/api/workers', require('./routes/workers'));

@@ -226,7 +226,7 @@ class _ClaimsScreenState extends State<ClaimsScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    if (status == 'rejected')
+                    if (status == 'rejected' || status == 'pending_review')
                       FilledButton.icon(
                         style: FilledButton.styleFrom(
                             backgroundColor: const Color(0xFF6366F1),
@@ -241,7 +241,8 @@ class _ClaimsScreenState extends State<ClaimsScreen> {
                           _override(c);
                         },
                       ),
-                    if (status == 'rejected') const SizedBox(width: 8),
+                    if (status == 'rejected' || status == 'pending_review')
+                      const SizedBox(width: 8),
                     OutlinedButton(
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Color(0xFF334155)),
@@ -344,6 +345,7 @@ class _ClaimsScreenState extends State<ClaimsScreen> {
               'all',
               'approved',
               'rejected',
+              'pending_review',
               'pending_verification'
             ])
               Padding(

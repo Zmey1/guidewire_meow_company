@@ -326,7 +326,7 @@ Important:
 ### 8.1 Demo Rider — active coverage/history smoke test
 
 - Phone: `9000000001`
-- Password: `Demo@1234`
+- Password: value of `SEED_DEMO_PASSWORD`
 
 Expected checks:
 
@@ -359,7 +359,7 @@ Expected checks:
 ### 8.2 Raj Kumar — eligible purchase + claim flow
 
 - Phone: `9876543210`
-- Password: `Rider@123`
+- Password: value of `SEED_RIDER_PASSWORD`
 
 Expected checks:
 
@@ -373,7 +373,7 @@ Expected checks:
 ### 8.3 Meena Rao — ineligible rider flow
 
 - Phone: `9876543213`
-- Password: `Rider@123`
+- Password: value of `SEED_RIDER_PASSWORD`
 
 Expected checks:
 
@@ -385,7 +385,7 @@ Expected checks:
 ### 8.4 Priya Suresh — partly-active tier behavior
 
 - Phone: `9876543211`
-- Password: `Rider@123`
+- Password: value of `SEED_RIDER_PASSWORD`
 
 Expected checks:
 
@@ -399,7 +399,7 @@ Expected checks:
 Use this when you want to verify the async verification pipeline resolves a freshly filed claim instead of only checking pre-seeded history.
 
 - Phone: `9000000001`
-- Password: `Demo@1234`
+- Password: value of `SEED_DEMO_PASSWORD`
 - Trigger to select in app: `Flood/Waterlogging`
 
 Why this case is reliable:
@@ -464,7 +464,7 @@ If you see a rejected claim with `No covered shift overlap detected in the curre
 Admin login uses **email + password**.
 
 - Email: `admin@shiftsure.in`
-- Password: `Admin@123`
+- Password: value of `SEED_ADMIN_PASSWORD`
 
 Run admin locally on the same machine as the backend:
 

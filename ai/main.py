@@ -5,14 +5,17 @@ Swagger UI available at /docs after startup.
 Risk and pricing are served by GLM-style actuarial logic with stable API contracts.
 """
 
+import hmac
 import logging
 import math
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from models import (
     RiskScoreRequest, RiskScoreResponse, RiskBreakdown,
@@ -61,6 +64,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Internal auth ────────────────────────────────────────────────────────────
+# The Cloud Run URL is public, so when AI_SERVICE_TOKEN is set every endpoint
+# except /health requires the backend's X-Internal-Token header. Without this,
+# anyone could call /fraud-check and rewrite worker trust scores in Neo4j.
+
+_INTERNAL_TOKEN = os.getenv("AI_SERVICE_TOKEN", "")
+if not _INTERNAL_TOKEN:
+    logger.warning("AI_SERVICE_TOKEN not set — AI endpoints are unauthenticated (local dev only)")
+
+
+@app.middleware("http")
+async def require_internal_token(request: Request, call_next):
+    if _INTERNAL_TOKEN and request.url.path != "/health":
+        supplied = request.headers.get("x-internal-token", "")
+        if not hmac.compare_digest(supplied.encode(), _INTERNAL_TOKEN.encode()):
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
 
 
 # ── Health ───────────────────────────────────────────────────────────────────
@@ -242,11 +264,12 @@ def fraud_check(req: FraudCheckRequest):
             payout_amount=req.payout_amount,
             peer_consensus_ratio=req.peer_consensus_ratio,
         )
-    except RuntimeError as e:
-        logger.error(f"Fraud check error: {e}")
-        # If Neo4j is unavailable locally, fail open so claim verification can continue.
+    except Exception as e:  # Neo4j unset, unreachable, paused, auth failure, query error...
+        logger.error(f"Fraud check unavailable: {e!r}")
+        # Fail SAFE: never approve without a graph verdict. The backend holds
+        # the claim in pending_review for an admin to resolve.
         result = {
-            "decision": "approved",
+            "decision": "pending_review",
             "fraud_result": {
                 "graph_anomaly_score": 0.0,
                 "ring_detected": "none",

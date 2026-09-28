@@ -1,362 +1,217 @@
-# ShiftSure Hackathon Cloud Run Deployment Guide
+# ShiftSure Demo Deployment Guide (5-user private demo)
 
-This is the canonical deployment runbook for the hackathon/demo version of `Zmey1/guidewire_meow_company`.
+This is the canonical deployment runbook for the demo version of `Zmey1/guidewire_meow_company`.
 
-The deployment target is intentionally lean:
-
-- Firebase project: `shiftsure-a34e9`
+- Firebase / GCP project: **`shiftsure-a34e9`** (the original project, project number `67264024586`). `shiftsure1` was a temporary stand-in while the original hit free-tier limits — do not deploy to it.
 - Region: `asia-south1`
-- `backend`: Google Cloud Run
-- `ai`: Google Cloud Run
-- `admin`: Firebase Hosting
-- `mobile`: signed Android APK direct install
-- Data/Auth: Firebase Auth + Firestore on Firebase Spark
+- `backend` (Node/Express) and `ai` (FastAPI): Google Cloud Run
+- `admin` (Flutter web): Firebase Hosting
+- `mobile` (Flutter Android): APK, direct install — not part of this deployment
+- Data/Auth: Firebase Auth + Firestore
 - Fraud graph: Neo4j Aura Free
-- Weather source: OpenWeatherMap
-- CI/CD: GitHub Actions + Google Workload Identity Federation
+- Weather: OpenWeatherMap
+- CI/CD: GitHub Actions + Workload Identity Federation
 
-Important cost note:
+The deploy and seed workflows refuse to run if `GCP_PROJECT_ID` differs from the `.firebaserc` default project.
 
-- `Cloud Run` and `Artifact Registry` still require an active Google Cloud billing account, even if actual monthly charges stay at `$0` under free-tier usage.
-- Official references:
-  - [Google Cloud Free Tier](https://cloud.google.com/free/docs/free-cloud-features)
-  - [Artifact Registry pricing](https://cloud.google.com/artifact-registry/pricing)
-  - [Firebase pricing](https://firebase.google.com/pricing)
-  - [Neo4j pricing](https://neo4j.com/pricing/)
+## 1. Safety defaults
 
-## 1. Target Architecture
+- **Payouts are simulated.** `PAYOUT_MODE=simulated` (the default and what the deploy workflow sets) credits in-app wallets only. Withdrawals are recorded as simulated; RazorpayX is never called, even if RazorpayX keys are present. Real payouts require `PAYOUT_MODE=razorpayx` **and** RazorpayX keys — do not enable this for the demo.
+- **Payouts are idempotent.** Every claim payout (rider-filed, admin-triggered, admin override) goes through `backend/services/payoutService.js`: one Firestore transaction updates claim status, weekly cap, wallet (created if missing), ledger entry `payout_<claimId>` and pool. A claim can never be paid twice.
+- **Fraud check fails safe.** If the AI service or Neo4j is unavailable, claims go to `pending_review` (no payout) instead of being approved or rejected. Admins resolve them via *Override* in the admin Claims screen.
+- **AI service is private by token.** Its Cloud Run URL is public, but every endpoint except `/health` requires the `X-Internal-Token` header matching `AI_SERVICE_TOKEN`. The backend sends it automatically.
+- **CORS** allows only the Hosting domains (`https://shiftsure-a34e9.web.app`, `https://shiftsure-a34e9.firebaseapp.com`). The Android app is unaffected by CORS.
 
-`backend`
-- Node.js Express API on public Cloud Run.
-- Uses Firebase Admin SDK through the attached Cloud Run service account.
-- Reads `FIREBASE_PROJECT_ID`, `AI_SERVICE_URL`, `OWM_API_KEY`, and `CORS_ALLOWED_ORIGINS` from env vars.
+## 2. Claim verification on Cloud Run (limitation)
 
-`ai`
-- FastAPI service on public Cloud Run.
-- Reads `NEO4J_URI`, `NEO4J_USER`, and `NEO4J_PASSWORD` from env vars.
-- Uses Neo4j Aura Free for graph-backed fraud checks.
+Cloud Run only gives an instance CPU while a request is in flight. Claim verification therefore runs **inside** the `POST /api/claims/file` request: the response returns once the claim is `approved`, `rejected` or `pending_review` (typically a few seconds; longer on a cold start).
 
-`admin`
-- Flutter web app deployed to Firebase Hosting.
-- Uses the generated Firebase web config already in the repo.
-- Must be built with `--dart-define=API_BASE_URL=https://<backend-url>/api`.
+Limitations (acceptable for 5 users):
 
-`mobile`
-- Flutter Android app distributed as a signed APK artifact.
-- No Google Play setup is required for the hackathon version.
-- Must be built with `--dart-define=API_BASE_URL=https://<backend-url>/api`.
+- Not a durable queue. If the instance crashes or is replaced mid-request, the claim stays in `pending_verification`. Admins can see it on the Claims screen. Re-filing within 30 minutes is blocked as a duplicate, so the fix is to wait out the window or approve it manually in Firestore.
+- With `min-instances=0`, the first request after idle pays a cold start (backend + AI + Neo4j Aura wake-up). Warm the services before a demo (see §7).
+- Neo4j Aura Free pauses after inactivity. While paused, fraud checks fail safe to `pending_review`. Resume the instance in the Aura console before the demo.
 
-## 2. Cost-Control Defaults
+If you need faster responses and no cold starts, set `--min-instances 1` on the backend. This is **not free** — one always-on instance is billed continuously.
 
-Use these defaults for both Cloud Run services:
+## 3. Cost
 
-- `min-instances=0`
-- `max-instances=1`
-- `cpu=1`
-- `memory=512Mi`
-- public URL
-- one environment only: production/demo
+| Item | Expected cost for a 5-user demo |
+|---|---|
+| Cloud Run (2 services, min 0, max 1, CPU throttled) | $0 within the free tier; **billing account required** |
+| Artifact Registry (2 images × 2 versions kept) | ~$0 (0.5 GB free); billing account required |
+| Firebase Auth / Firestore / Hosting | $0 on Spark limits at this scale |
+| Neo4j Aura Free | $0 |
+| OpenWeatherMap free tier | $0 |
+| `min-instances=1` on backend (optional) | Roughly $10–15/month per always-on instance — verify in the GCP pricing calculator |
 
-Keep Artifact Registry usage low:
+Set a GCP budget alert (e.g. $5) on the billing account before the first deploy.
 
-- store backend and AI images in one repo: `shiftsure`
-- retain only the latest 2 image versions for each service after every deploy
-- avoid per-commit image buildup beyond the demo window
+## 4. Configuration
 
-For the hackathon path:
+### Runtime env (set by `deploy-prod.yml` — do not set `PORT`; Cloud Run reserves it)
 
-- do not use Secret Manager
-- do not use Google Play Internal Testing
-- do not create staging
+`backend`: `FIREBASE_PROJECT_ID`, `AI_SERVICE_URL`, `AI_SERVICE_TOKEN`, `OWM_API_KEY`, `CORS_ALLOWED_ORIGINS`, `PAYOUT_MODE=simulated`, `NODE_ENV=production`
 
-## 3. Required Runtime Config
+`ai`: `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`, `AI_SERVICE_TOKEN`
 
-`backend`
-- `PORT=8080`
-- `FIREBASE_PROJECT_ID=shiftsure-a34e9`
-- `AI_SERVICE_URL=https://<ai-cloud-run-url>`
-- `OWM_API_KEY=<owm-key>`
-- `CORS_ALLOWED_ORIGINS=https://shiftsure-a34e9.web.app,https://shiftsure-a34e9.firebaseapp.com,http://localhost:3000`
+Flutter compile time: `API_BASE_URL=https://<backend-cloud-run-url>/api`
 
-`ai`
-- `PORT=8080`
-- `NEO4J_URI=<aura-free-uri>`
-- `NEO4J_USER=<neo4j-user>`
-- `NEO4J_PASSWORD=<neo4j-password>`
+### GitHub Variables (Settings → Secrets and variables → Actions → Variables)
 
-`Flutter compile-time`
-- `API_BASE_URL=https://<backend-cloud-run-url>/api`
-
-`GitHub Variables`
 - `GCP_PROJECT_ID=shiftsure-a34e9`
-- `GCP_REGION=asia-south1`
-- `ARTIFACT_REGISTRY_REPO=shiftsure`
-- `CLOUD_RUN_BACKEND_SERVICE=shiftsure-backend`
-- `CLOUD_RUN_AI_SERVICE=shiftsure-ai`
+- `GCP_REGION=asia-south1` (optional, default)
+- `ARTIFACT_REGISTRY_REPO=shiftsure` (optional, default)
+- `CLOUD_RUN_BACKEND_SERVICE=shiftsure-backend`, `CLOUD_RUN_AI_SERVICE=shiftsure-ai` (optional, defaults)
 
-`GitHub Secrets`
-- `GCP_WIF_PROVIDER`
-- `GCP_DEPLOY_SERVICE_ACCOUNT`
-- `OWM_API_KEY`
-- `NEO4J_URI`
-- `NEO4J_USER`
-- `NEO4J_PASSWORD`
-- `ANDROID_KEYSTORE_BASE64`
-- `ANDROID_KEY_ALIAS`
-- `ANDROID_KEY_PASSWORD`
-- `ANDROID_STORE_PASSWORD`
+### GitHub Secrets (put them on the `production` environment)
 
-## 4. One-Time Cloud Setup
+| Secret | Used by | Notes |
+|---|---|---|
+| `GCP_WIF_PROVIDER` | deploy, seed | `projects/<num>/locations/global/workloadIdentityPools/<pool>/providers/<provider>` |
+| `GCP_DEPLOY_SERVICE_ACCOUNT` | deploy, seed | `shiftsure-github-deployer@shiftsure-a34e9.iam.gserviceaccount.com` |
+| `AI_SERVICE_TOKEN` | deploy | random ≥32 chars, e.g. `openssl rand -hex 32` |
+| `OWM_API_KEY` | deploy | **use a newly issued key** — the old one was committed to git |
+| `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` | deploy | from the Aura console |
+| `SEED_ADMIN_PASSWORD`, `SEED_DEMO_PASSWORD`, `SEED_RIDER_PASSWORD` | seed only (not needed — do not seed `shiftsure-a34e9`) | ≥12 chars each; seed refuses shorter ones and rotates existing demo users to these |
+| `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`, `ANDROID_STORE_PASSWORD` | Android build | see §5.6 |
 
-### 4.1 Enable required GCP/Firebase services
+Never commit service-account JSON, `.env` files, keystores or Neo4j credential exports. `.gitignore` and both `.dockerignore` files exclude them.
+
+## 5. One-time setup (run by a project owner; needs `gcloud` and `firebase` CLIs)
+
+### 5.1 Enable services
 
 ```bash
 gcloud config set project shiftsure-a34e9
 
 gcloud services enable \
-  run.googleapis.com \
-  artifactregistry.googleapis.com \
-  iam.googleapis.com \
-  iamcredentials.googleapis.com \
-  sts.googleapis.com \
-  firestore.googleapis.com \
-  firebase.googleapis.com \
-  identitytoolkit.googleapis.com
+  run.googleapis.com artifactregistry.googleapis.com iam.googleapis.com \
+  iamcredentials.googleapis.com sts.googleapis.com firestore.googleapis.com \
+  firebase.googleapis.com identitytoolkit.googleapis.com firebasehosting.googleapis.com
 ```
 
-### 4.2 Create Artifact Registry
+### 5.2 Artifact Registry
 
 ```bash
 gcloud artifacts repositories create shiftsure \
-  --repository-format=docker \
-  --location=asia-south1 \
-  --description="ShiftSure hackathon containers"
+  --repository-format=docker --location=asia-south1 \
+  --description="ShiftSure demo containers"
 ```
 
-### 4.3 Create service accounts
+### 5.3 Service accounts
 
 ```bash
-gcloud iam service-accounts create shiftsure-backend-runtime \
-  --display-name="ShiftSure Backend Runtime"
+gcloud iam service-accounts create shiftsure-backend-runtime --display-name="ShiftSure Backend Runtime"
+gcloud iam service-accounts create shiftsure-ai-runtime      --display-name="ShiftSure AI Runtime"
+gcloud iam service-accounts create shiftsure-github-deployer --display-name="ShiftSure GitHub Deployer"
 
-gcloud iam service-accounts create shiftsure-ai-runtime \
-  --display-name="ShiftSure AI Runtime"
-
-gcloud iam service-accounts create shiftsure-github-deployer \
-  --display-name="ShiftSure GitHub Deployer"
+P=shiftsure-a34e9
+gcloud projects add-iam-policy-binding $P --member="serviceAccount:shiftsure-backend-runtime@$P.iam.gserviceaccount.com" --role=roles/datastore.user
+for r in roles/run.admin roles/artifactregistry.writer roles/iam.serviceAccountUser roles/editor; do
+  gcloud projects add-iam-policy-binding $P --member="serviceAccount:shiftsure-github-deployer@$P.iam.gserviceaccount.com" --role=$r
+done
 ```
 
-Grant these roles:
+`shiftsure-ai-runtime` needs no roles. `roles/editor` on the deployer is speed-first for the demo (it covers Hosting, Firestore rules and Firebase Auth user creation for the seed). Tighten it after the demo.
 
-`shiftsure-backend-runtime`
-- `roles/datastore.user`
-
-`shiftsure-ai-runtime`
-- no extra GCP roles required for the hackathon setup
-
-`shiftsure-github-deployer`
-- `roles/run.admin`
-- `roles/artifactregistry.writer`
-- `roles/iam.serviceAccountUser`
-- `roles/editor`
-
-The `editor` grant is intentionally speed-first for the hackathon. Tighten it later if this project moves beyond demo use.
-
-### 4.4 Configure GitHub OIDC
-
-1. Create a Workload Identity Pool and GitHub OIDC provider.
-2. Allow the GitHub repo to impersonate `shiftsure-github-deployer@shiftsure-a34e9.iam.gserviceaccount.com`.
-3. Save these in GitHub Secrets:
-   - `GCP_WIF_PROVIDER`
-   - `GCP_DEPLOY_SERVICE_ACCOUNT`
-
-### 4.5 Configure Firebase
-
-1. Confirm Firestore and Authentication are enabled in `shiftsure-a34e9`.
-2. Add these admin Hosting domains to Firebase Auth authorized domains before first admin login:
-   - `shiftsure-a34e9.web.app`
-   - `shiftsure-a34e9.firebaseapp.com`
-3. Keep the root `.firebaserc` default project mapped to `shiftsure-a34e9`.
-
-### 4.6 Configure Neo4j Aura Free
-
-1. Create a free AuraDB instance.
-2. Capture:
-   - `NEO4J_URI`
-   - `NEO4J_USER`
-   - `NEO4J_PASSWORD`
-3. Add them as GitHub Secrets.
-
-### 4.7 Configure Android signing
-
-1. Create an Android upload/signing keystore.
-2. Base64-encode it and save it as `ANDROID_KEYSTORE_BASE64`.
-3. Save:
-   - `ANDROID_KEY_ALIAS`
-   - `ANDROID_KEY_PASSWORD`
-   - `ANDROID_STORE_PASSWORD`
-4. The workflow reconstructs `mobile/android/key.properties` at build time.
-
-## 5. Repo And Workflow Behavior
-
-### 5.1 Deploy workflow
-
-`.github/workflows/deploy-prod.yml` should do all of this:
-
-1. authenticate to GCP via OIDC
-2. build and push the AI image
-3. deploy AI to Cloud Run with:
-   - public ingress
-   - `PORT=8080`
-   - direct env vars for `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
-   - `min-instances=0`
-   - `max-instances=1`
-   - `cpu=1`
-   - `memory=512Mi`
-4. build and push the backend image
-5. deploy backend to Cloud Run with:
-   - public ingress
-   - `PORT=8080`
-   - `FIREBASE_PROJECT_ID`
-   - `AI_SERVICE_URL`
-   - `OWM_API_KEY`
-   - `CORS_ALLOWED_ORIGINS`
-   - `min-instances=0`
-   - `max-instances=1`
-   - `cpu=1`
-   - `memory=512Mi`
-6. build the admin web app with `API_BASE_URL`
-7. deploy Firebase Hosting plus Firestore rules/indexes
-8. run `/health` checks for AI and backend
-9. delete old Artifact Registry image versions, keeping only the latest 2 for `shiftsure-ai` and `shiftsure-backend`
-
-### 5.2 Android workflow
-
-`.github/workflows/build-android-release.yml` should:
-
-1. rebuild the keystore files from GitHub Secrets
-2. build a signed APK, not an AAB
-3. use `API_BASE_URL` as a required workflow input
-4. upload the final APK as a workflow artifact
-
-Release command:
+### 5.4 GitHub OIDC (Workload Identity Federation)
 
 ```bash
-flutter build apk --release --dart-define=API_BASE_URL=https://<backend-url>/api
+P=shiftsure-a34e9; REPO=Zmey1/guidewire_meow_company
+PN=$(gcloud projects describe $P --format='value(projectNumber)')
+gcloud iam workload-identity-pools create github --location=global
+gcloud iam workload-identity-pools providers create-oidc github \
+  --location=global --workload-identity-pool=github \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --attribute-condition="assertion.repository=='$REPO'"
+gcloud iam service-accounts add-iam-policy-binding shiftsure-github-deployer@$P.iam.gserviceaccount.com \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/$PN/locations/global/workloadIdentityPools/github/attribute.repository/$REPO"
+echo "GCP_WIF_PROVIDER=projects/$PN/locations/global/workloadIdentityPools/github/providers/github"
 ```
 
-### 5.3 Demo seed workflow
+### 5.5 Firebase
 
-`.github/workflows/seed-demo-data.yml` stays manual-only.
+1. Firestore (native mode) and Authentication → Email/Password are enabled in `shiftsure-a34e9`.
+2. Authentication → Settings → Authorized domains includes `shiftsure-a34e9.web.app` and `shiftsure-a34e9.firebaseapp.com` (verified present).
+3. `.firebaserc`, `admin/lib/firebase_options.dart`, `mobile/lib/firebase_options.dart`, `mobile/android/app/google-services.json` and both `firebase.json` files all point at `shiftsure-a34e9` (every API key verified to resolve to project `67264024586`) — keep it that way.
+4. The Spark plan's daily Firestore quotas are what forced the earlier move to `shiftsure1`. Five users are well within them, but avoid re-running the seed or the live E2E suite repeatedly on demo day. Upgrading to Blaze (pay-as-you-go, with a budget alert) removes the hard cap.
 
-Use it:
-- after backend deploy
-- only when demo accounts/data are needed
+### 5.6 Android signing (current state)
 
-Do not auto-run it as part of deploy.
+`mobile/android/app/build.gradle.kts` signs `release` builds with the **debug** config; the keystore secrets restored by the workflow are not wired into Gradle yet. For a private sideloaded demo this works. Each CI runner has a different debug key, though, so testers must uninstall before installing an APK built on a different machine or run. To ship a stable signature, add a `release` signingConfig that reads `key.properties`.
 
-## 6. Deployment Order
+## 6. Deploy sequence
 
-For the live hackathon environment:
+Everything below is manual (`workflow_dispatch`); nothing deploys on push.
 
-1. ensure `main` is green
-2. run `Deploy Production`
-3. verify deployed AI `/health`
-4. verify deployed backend `/health`
-5. open the admin Hosting site and verify login
-6. run `Seed Demo Data` if demo users are needed
-7. run `Build Android Release`
-8. download the APK artifact and install it directly on demo devices
+1. Merge the reviewed deployment PR into `main`. The workflows build from the pushed commit, not from local files.
+2. Check that the **ShiftSure Tests** run on `main` is green (backend unit + AI pytest + Flutter).
+3. Resume the Neo4j Aura instance if it is paused.
+4. Actions → **Deploy Production** → Run workflow. It deploys only the AI service, the backend and the admin web dashboard. It:
+   - verifies the target project matches `.firebaserc` and that every required secret is set,
+   - builds and deploys `ai`, then builds and deploys `backend` (Cloud Run),
+   - builds `admin` with the backend URL and deploys Firebase Hosting plus Firestore rules and indexes. This touches no Firestore data. The rules deny all client access, which is safe because neither app reads Firestore directly. Index deploys only add indexes; non-interactive mode never deletes existing ones,
+   - checks both `/health` endpoints and that the AI service returns 401 without a token,
+   - trims old images.
+   Copy the Backend URL from the job summary.
+5. **Do not run the seed on `shiftsure-a34e9`.** It deletes and overwrites existing demo data. To retire the previously published demo passwords, rotate them on the existing accounts instead. This changes only the password, then signs out existing sessions; nothing is created, deleted or written to Firestore:
+   ```bash
+   cd backend
+   gcloud auth application-default login          # an account with Firebase Auth admin rights on shiftsure-a34e9
+   export FIREBASE_PROJECT_ID=shiftsure-a34e9 SEED_ADMIN_PASSWORD=... SEED_DEMO_PASSWORD=... SEED_RIDER_PASSWORD=...
+   npm run rotate-demo-passwords                  # dry run: lists the accounts it would change
+   npm run rotate-demo-passwords -- --apply       # performs the rotation
+   ```
+6. The Android APK is out of scope for this deployment. If it's needed later: Actions → **Build Android Release** with `api_base_url=https://<backend-url>/api` (see §5.6 on signing).
 
-## 7. Smoke Checks
-
-### 7.1 Infrastructure
+## 7. Smoke checks
 
 ```bash
-curl -s https://<ai-url>/health
-curl -s https://<backend-url>/health
+curl -s https://<ai-url>/health                  # 200
+curl -s https://<backend-url>/health             # 200
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<ai-url>/risk-score   # must be 401
+curl -s -o /dev/null -w '%{http_code}\n' https://<backend-url>/api/wallet     # must be 401 (no token)
 ```
 
-Confirm:
-- both return `200`
-- backend logs show successful calls to the AI URL
+5-user checklist:
 
-### 7.2 Admin
-
-Verify on `https://shiftsure-a34e9.web.app` or the Firebase Hosting site:
-
-- Firebase admin login works
-- Dashboard loads
-- Zones loads
-- Claims loads
-- admin-triggered payout still works
-
-### 7.3 Backend functional smoke
-
-After demo data is seeded:
-
-- demo rider login works
-- `/api/workers/me` works
-- `/api/policies/current` works
-- `/api/claims` works
-- `/api/wallet` works
-- `/api/zones/risk` works
-- claim filing goes `pending_verification -> resolved`
-- withdrawal success and insufficient-balance behavior still work
-
-### 7.4 Android demo smoke
-
-After installing the signed APK:
-
-- login works
-- Home loads
-- Claims loads
-- Wallet loads
-- filing a claim works end to end
-- bad credentials show readable errors
-- backend connectivity failures show readable errors
+- [ ] Admin login on `https://shiftsure-a34e9.web.app`; Dashboard, Zones and Claims load
+- [ ] Rider files a claim: the response shows `approved`, `rejected` or `pending_review` (never stuck on `pending_verification`)
+- [ ] Filing the same trigger again within 30 minutes gets "duplicate claim" (429)
+- [ ] An approved claim credits the wallet exactly once, and the ledger shows one `payout_<claimId>` entry
+- [ ] Pause Neo4j (or stop AI) and file a claim: it becomes `pending_review` and the wallet is unchanged
+- [ ] Admin Override on a `pending_review` claim credits once; clicking Override again is refused
+- [ ] Withdrawal shows "Simulated withdrawal … no real money moved"; overdraw is refused
+- [ ] Admin-triggered payout (Zones → trigger) credits each eligible rider once
 
 ## 8. Rollback
 
-### 8.1 Cloud Run
-
-Roll back traffic to the previous revision:
+Cloud Run:
 
 ```bash
 gcloud run revisions list --service shiftsure-backend --region asia-south1
-gcloud run services update-traffic shiftsure-backend \
-  --region asia-south1 \
-  --to-revisions <PREVIOUS_REVISION>=100
+gcloud run services update-traffic shiftsure-backend --region asia-south1 --to-revisions <PREVIOUS_REVISION>=100
+# repeat for shiftsure-ai
 ```
 
-Repeat for `shiftsure-ai`.
+Only the latest 2 images per service are kept, so you can roll back one deploy.
 
-### 8.2 Firebase Hosting
-
-Roll back to the previous Hosting release:
+Firebase Hosting:
 
 ```bash
-firebase hosting:releases:list
-firebase hosting:clone <SITE_ID>:<OLD_VERSION_ID> <SITE_ID>:LIVE
+firebase hosting:releases:list --project shiftsure-a34e9
+firebase hosting:clone shiftsure-a34e9:<OLD_VERSION_ID> shiftsure-a34e9:live
 ```
 
-### 8.3 APK
+Do not run the seed during rollback.
 
-Keep the previous signed APK artifact available.
+## 9. Credentials hygiene
 
-If the latest APK is bad:
-- reinstall the previous APK on demo devices
-- keep backend/admin revisions compatible
-
-Do not rerun seed during rollback.
-
-## 9. Defaults For This Hackathon
-
-- one live environment only
-- no staging
-- Firebase Spark for Auth, Firestore, and Hosting
-- Cloud Run for backend and AI
-- Neo4j Aura Free
-- signed APK direct install instead of Google Play
-- public Cloud Run URLs are acceptable
-- GitHub Actions is the primary deployment path
+- The OpenWeatherMap key that was committed in git history (and in `shiftsure_temp-main.zip`) must be **revoked and reissued** before the demo.
+- Demo passwords that were published in docs (`Demo@1234`, `Rider@123`, `Admin@123`) are rotated with `npm run rotate-demo-passwords` using new `SEED_*` secrets.
+- `backend/serviceAccountKey-1.json` is a downloaded key for a `shiftsure-a34e9` service account. It is gitignored and was never committed, but deployment uses Workload Identity, not key files. Delete that key in GCP Console → IAM → Service accounts → Keys once local work is done. Also note that `backend/serviceAccountKey.json` is not a service account (it's a `shiftsure1` google-services file), so local backend runs need a real key or `gcloud auth application-default login`.
+- The live E2E suite must never target `shiftsure-a34e9` during the demo.
+- The live E2E suite (`npm run test:e2e`) writes to real Firebase. It is manual-only (Tests workflow → `run_live_e2e`).

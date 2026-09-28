@@ -1,13 +1,10 @@
 /**
- * jest.config.js — Jest multi-project config for test pyramid.
- *
- * Projects: unit → integration → flow
- * Run all:         npm test
- * Run by layer:    npm run test:unit
+ * jest.config.js — default suite: hermetic unit tests (no network, no live Firebase).
+ * The live E2E suite runs only on demand: npm run test:e2e (see jest.e2e.config.js).
  */
 
 module.exports = {
   testEnvironment: 'node',
-  testMatch: ['<rootDir>/tests/e2e/**/*.test.js'],
+  testMatch: ['<rootDir>/tests/unit/**/*.test.js'],
   testTimeout: 30000,
 };

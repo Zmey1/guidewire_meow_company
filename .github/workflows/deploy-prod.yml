@@ -25,6 +25,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify target project matches .firebaserc
+        run: |
+          EXPECTED="$(python3 -c 'import json; print(json.load(open(".firebaserc"))["projects"]["default"])')"
+          if [ "${GCP_PROJECT_ID}" != "${EXPECTED}" ]; then
+            echo "GCP_PROJECT_ID=${GCP_PROJECT_ID} does not match .firebaserc default=${EXPECTED}; refusing to deploy."
+            exit 1
+          fi
+          for s in NEO4J_URI NEO4J_USER NEO4J_PASSWORD OWM_API_KEY AI_SERVICE_TOKEN; do
+            if [ -z "${!s}" ]; then echo "Missing required secret: $s"; exit 1; fi
+          done
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USER: ${{ secrets.NEO4J_USER }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          OWM_API_KEY: ${{ secrets.OWM_API_KEY }}
+          AI_SERVICE_TOKEN: ${{ secrets.AI_SERVICE_TOKEN }}
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -63,14 +80,18 @@ jobs:
 
       - name: Deploy AI service
         id: deploy_ai
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USER: ${{ secrets.NEO4J_USER }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          AI_SERVICE_TOKEN: ${{ secrets.AI_SERVICE_TOKEN }}
         run: |
           AI_RUNTIME_SA="shiftsure-ai-runtime@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
-          cat <<EOF >/tmp/ai-env.yaml
-          PORT: "8080"
-          NEO4J_URI: "${{ secrets.NEO4J_URI }}"
-          NEO4J_USER: "${{ secrets.NEO4J_USER }}"
-          NEO4J_PASSWORD: "${{ secrets.NEO4J_PASSWORD }}"
-          EOF
+          # JSON is valid YAML and survives quotes/backslashes in secret values
+          python3 - <<'PY' >"$RUNNER_TEMP/ai-env.yaml"
+          import json, os
+          print(json.dumps({k: os.environ[k] for k in ("NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD", "AI_SERVICE_TOKEN")}))
+          PY
 
           gcloud run deploy "${CLOUD_RUN_AI_SERVICE}" \
             --image "${AI_IMAGE}" \
@@ -83,7 +104,7 @@ jobs:
             --min-instances 0 \
             --max-instances 1 \
             --cpu-throttling \
-            --env-vars-file /tmp/ai-env.yaml
+            --env-vars-file "$RUNNER_TEMP/ai-env.yaml"
 
           AI_URL="$(gcloud run services describe "${CLOUD_RUN_AI_SERVICE}" \
             --region "${GCP_REGION}" \
@@ -103,17 +124,22 @@ jobs:
 
       - name: Deploy backend service
         id: deploy_backend
+        env:
+          OWM_API_KEY: ${{ secrets.OWM_API_KEY }}
+          AI_SERVICE_TOKEN: ${{ secrets.AI_SERVICE_TOKEN }}
         run: |
           BACKEND_RUNTIME_SA="shiftsure-backend-runtime@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
-          CORS_ORIGINS="https://${GCP_PROJECT_ID}.web.app,https://${GCP_PROJECT_ID}.firebaseapp.com,http://localhost:3000"
+          export CORS_ALLOWED_ORIGINS="https://${GCP_PROJECT_ID}.web.app,https://${GCP_PROJECT_ID}.firebaseapp.com"
+          export FIREBASE_PROJECT_ID="${GCP_PROJECT_ID}" AI_SERVICE_URL="${AI_URL}"
+          # Demo deploys always use simulated payouts — never real RazorpayX money.
+          export PAYOUT_MODE=simulated NODE_ENV=production
 
-          cat <<EOF >/tmp/backend-env.yaml
-          PORT: "8080"
-          FIREBASE_PROJECT_ID: "${GCP_PROJECT_ID}"
-          AI_SERVICE_URL: "${AI_URL}"
-          OWM_API_KEY: "${{ secrets.OWM_API_KEY }}"
-          CORS_ALLOWED_ORIGINS: "${CORS_ORIGINS}"
-          EOF
+          python3 - <<'PY' >"$RUNNER_TEMP/backend-env.yaml"
+          import json, os
+          keys = ("FIREBASE_PROJECT_ID", "AI_SERVICE_URL", "AI_SERVICE_TOKEN", "OWM_API_KEY",
+                  "CORS_ALLOWED_ORIGINS", "PAYOUT_MODE", "NODE_ENV")
+          print(json.dumps({k: os.environ[k] for k in keys}))
+          PY
 
           gcloud run deploy "${CLOUD_RUN_BACKEND_SERVICE}" \
             --image "${BACKEND_IMAGE}" \
@@ -126,7 +152,7 @@ jobs:
             --min-instances 0 \
             --max-instances 1 \
             --cpu-throttling \
-            --env-vars-file /tmp/backend-env.yaml
+            --env-vars-file "$RUNNER_TEMP/backend-env.yaml"
 
           BACKEND_URL="$(gcloud run services describe "${CLOUD_RUN_BACKEND_SERVICE}" \
             --region "${GCP_REGION}" \
@@ -151,6 +177,9 @@ jobs:
         run: |
           curl --fail --silent --show-error "${AI_URL}/health" >/tmp/ai-health.json
           curl --fail --silent --show-error "${BACKEND_URL}/health" >/tmp/backend-health.json
+          # The AI service must refuse callers without the internal token
+          code="$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST "${AI_URL}/risk-score" -H 'Content-Type: application/json' -d '{}')"
+          if [ "$code" != "401" ]; then echo "AI service is not enforcing AI_SERVICE_TOKEN (got HTTP $code)"; exit 1; fi
           printf 'AI URL: %s\n' "${AI_URL}" >> "$GITHUB_STEP_SUMMARY"
           printf 'Backend URL: %s\n' "${BACKEND_URL}" >> "$GITHUB_STEP_SUMMARY"
           printf 'Admin URL: %s\n' "https://${GCP_PROJECT_ID}.web.app" >> "$GITHUB_STEP_SUMMARY"
